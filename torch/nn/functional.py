@@ -11,7 +11,7 @@ from . import _functions
 from .modules import utils
 from ._functions.linear import Bilinear
 from ._functions.padding import ConstantPadNd
-from ._functions.vision import GridSampler, AffineGridGenerator
+from ._functions import vision
 from torch.autograd import Variable
 from .modules.utils import _single, _pair, _triple
 
@@ -768,7 +768,7 @@ softplus(input, beta=1, threshold=20) -> Variable
 def _get_softmax_dim(name, ndim, stacklevel):
     warnings.warn("Implicit dimension choice for " + name + " has been deprecated. "
                   "Change the call to include dim=X as an argument.", stacklevel=stacklevel)
-    if ndim == 0 or ndim == 3:
+    if ndim == 0 or ndim == 1 or ndim == 3:
         return 0
     else:
         return 1
@@ -1526,7 +1526,7 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
 
     """
     batch_size, channels, in_height, in_width = input.size()
-    return GridSampler.apply(input, grid, padding_mode)
+    return vision.grid_sampler(input, grid, padding_mode)
 
 
 def affine_grid(theta, size):
@@ -1542,7 +1542,7 @@ def affine_grid(theta, size):
     Returns:
         output (Variable): output Tensor of size (N x H x W x 2)
     """
-    return AffineGridGenerator.apply(theta, size)
+    return vision.affine_grid_generator(theta, size)
 
 
 def pad(input, pad, mode='constant', value=0):

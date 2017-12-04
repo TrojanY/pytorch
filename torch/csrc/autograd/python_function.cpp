@@ -661,9 +661,12 @@ static void _trace_create(PyObject* op_obj, THPFunction* bw_obj,
 
   // See Note [getValueTrace can allocate nodes]
   std::vector<Value*> value_traces;
+  std::vector<VariableFlags> var_flags;
   value_traces.reserve(input_vars.size());
-  for (auto& i : input_vars)
+  for (auto& i : input_vars) {
     value_traces.emplace_back(tracer::getValueTrace(tracing_state, i));
+    var_flags.push_back(VariableFlags::of(i));
+  }
 
   // NB: this function is called only from THPFunction_apply, which is used only
   // when computing forward. All these functions are non-traceable by definition,
@@ -677,6 +680,7 @@ static void _trace_create(PyObject* op_obj, THPFunction* bw_obj,
     THPObjectPtr(op_obj),
     arg_types,
     false, // TODO: remove is_legacy
+    std::move(var_flags),
     std::move(scalar_args)));
   for (auto t : value_traces)
     this_expr->addInput(t);
@@ -993,16 +997,20 @@ static PyObject *unpack_saved_variables(
 
 PyObject *THPFunction_saved_tensors(THPFunction *self, void *_unused)
 {
+  HANDLE_TH_ERRORS
   return unpack_saved_variables(self, [](const Variable& var) {
     return createPyObject(var.data());
   });
+  END_HANDLE_TH_ERRORS
 }
 
 PyObject *THPFunction_saved_variables(THPFunction *self, void *_unused)
 {
+  HANDLE_TH_ERRORS
   return unpack_saved_variables(self, [](const Variable& var) {
     return THPVariable_Wrap(var);
   });
+  END_HANDLE_TH_ERRORS
 }
 
 PyObject *THPFunction_next_functions(THPFunction *self, void *_unused)

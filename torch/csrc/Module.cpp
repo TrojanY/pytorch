@@ -21,13 +21,14 @@
 #include "torch/csrc/jit/python_ir.h"
 
 #ifdef WITH_CUDNN
-#include "cudnn/Module.h"
+#include <ATen/cudnn/cudnn-wrapper.h>
 #endif
 
 #define WITH_NUMPY_IMPORT_ARRAY
 #include "THP.h"
 
 #include "ModuleSparse.cpp"
+#include "DataLoader.cpp"
 
 PyObject* module;
 PyObject* tensor_classes;
@@ -342,6 +343,7 @@ IMPLEMENT_STATELESS(bmm)
 // TODO: this doesn't implement options that return numbers!
 IMPLEMENT_STATELESS(multinomial)
 IMPLEMENT_STATELESS(normal)
+IMPLEMENT_STATELESS(standard_gamma)
 IMPLEMENT_STATELESS(bernoulli)
 IMPLEMENT_STATELESS(range)
 IMPLEMENT_STATELESS(arange)
@@ -698,6 +700,7 @@ static PyMethodDef TorchMethods[] = {
   {"bmm",             (PyCFunction)THPModule_bmm,               METH_VARARGS | METH_KEYWORDS, NULL},
   {"multinomial",     (PyCFunction)THPModule_multinomial,       METH_VARARGS | METH_KEYWORDS, NULL},
   {"normal",          (PyCFunction)THPModule_normal,            METH_VARARGS | METH_KEYWORDS, NULL},
+  {"_standard_gamma",  (PyCFunction)THPModule_standard_gamma,    METH_VARARGS | METH_KEYWORDS, NULL},
   {"bernoulli",       (PyCFunction)THPModule_bernoulli,         METH_VARARGS | METH_KEYWORDS, NULL},
   {"rand",            (PyCFunction)THPModule_rand,              METH_VARARGS | METH_KEYWORDS, NULL},
   {"randn",           (PyCFunction)THPModule_randn,             METH_VARARGS | METH_KEYWORDS, NULL},
@@ -790,6 +793,23 @@ static std::vector<PyMethodDef> methods;
 PyMethodDef* THDPModule_methods();
 #endif
 
+// TODO: Refactor this in some less manual way
+#ifdef WITH_CUDNN
+static PyObject * THCUDNN_cudnn_version(PyObject *self, PyObject *args)
+{
+  return PyLong_FromLong(CUDNN_VERSION);
+}
+
+static PyMethodDef _THCUDNN_methods[] = {
+  {"_cudnn_version", (PyCFunction)THCUDNN_cudnn_version, METH_VARARGS, NULL},
+  {NULL}
+};
+
+PyMethodDef* THCUDNN_methods() {
+  return _THCUDNN_methods;
+}
+#endif
+
 static PyObject* initModule() {
   HANDLE_TH_ERRORS
   THInferNumThreads();
@@ -797,6 +817,7 @@ static PyObject* initModule() {
 #define ASSERT_TRUE(cmd) if (!(cmd)) return NULL
 
   THPUtils_addPyMethodDefs(methods, TorchMethods);
+  THPUtils_addPyMethodDefs(methods, DataLoaderMethods);
 #ifdef WITH_CUDA
   THPUtils_addPyMethodDefs(methods, THCPModule_methods());
 #endif

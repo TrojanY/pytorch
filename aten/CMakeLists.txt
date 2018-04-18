@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.0)
 set(CMAKE_MODULE_PATH
   ${CMAKE_CURRENT_SOURCE_DIR}/cmake
-  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindCUDA
+  ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/Modules_CUDA_fix
   /usr/lib/x86_64-linux-gnu/
   ${CMAKE_CURRENT_SOURCE_DIR}/src/TH/cmake
   ${CMAKE_MODULE_PATH})
@@ -9,6 +9,9 @@ SET(CMAKE_LIBRARY_PATH /usr/lib/x86_64-linux-gnu/ ${CMAKE_LIBRARY_PATH})
 project(ATen)
 
 cmake_policy(SET CMP0012 NEW)
+
+# Polyfill for upstream FindCUDA
+include(CMakeInitializeConfigs)
 
 # RPATH stuff
 # see https://cmake.org/Wiki/CMake_RPATH_handling
@@ -26,26 +29,70 @@ if("${isSystemDir}" STREQUAL "-1")
 endif()
 
 IF(NOT MSVC)
-  set(CMAKE_CXX_FLAGS "--std=c++11 -Wall -Wno-vla -fexceptions ${CMAKE_CXX_FLAGS}")
+  set(CMAKE_CXX_FLAGS "--std=c++11 -Wall -Wextra -Wno-missing-field-initializers -Wno-type-limits -Wno-unused-parameter -Wno-unknown-pragmas -Wno-vla -fexceptions ${CMAKE_CXX_FLAGS}")
   set(CMAKE_C_FLAGS "-fexceptions ${CMAKE_C_FLAGS}")
+  if ($ENV{WERROR})
+    set(CMAKE_CXX_FLAGS "-Werror ${CMAKE_CXX_FLAGS}")
+  endif()
 ENDIF(NOT MSVC)
 
+INCLUDE(CheckCXXSourceCompiles)
+
+# disable some verbose warnings
+IF (MSVC)
+  set(CMAKE_CXX_FLAGS "/wd4267 /wd4251 /wd4522 /wd4522 /wd4838 /wd4305 /wd4244 /wd4190 /wd4101 /wd4996 /wd4275 ${CMAKE_CXX_FLAGS}")
+ENDIF(MSVC)
+
+# windef.h will define max/min macros if NOMINMAX is not defined
+IF(MSVC)
+  add_definitions(/DNOMINMAX)
+ENDIF(MSVC)
+
+#Check if certain std functions are supported. Sometimes
+#_GLIBCXX_USE_C99 macro is not defined and some functions are missing.
+CHECK_CXX_SOURCE_COMPILES("
+#include <cmath>
+#include <string>
+
+int main() {
+  int a = std::isinf(3.0);
+  int b = std::isnan(0.0);
+  std::string s = std::to_string(1);
+
+  return 0;
+  }" SUPPORT_GLIBCXX_USE_C99)
+
+if(NOT SUPPORT_GLIBCXX_USE_C99)
+  message(FATAL_ERROR
+          "The C++ compiler does not support required functions. "
+          "This is very likely due to a known bug in GCC 5 "
+          "(and maybe other versions) on Ubuntu 17.10 and newer. "
+          "For more information, see: "
+          "https://github.com/pytorch/pytorch/issues/5229"
+         )
+endif()
 
 # Top-level build config
 ############################################
 # Flags
 # When using MSVC
 
-# Detect CUDA architecture and get best NVCC flags
+# Detect CUDA architecture and get best NVCC flags
 # finding cuda must be first because other things depend on the result
-IF(NOT CUDA_FOUND)
+#
+# NB: We MUST NOT run this find_package if NO_CUDA is set, because upstream
+# FindCUDA has a bug where it will still attempt to make use of NOTFOUND
+# compiler variables to run various probe tests.  We could try to fix
+# this, but since FindCUDA upstream is subsumed by first-class support
+# for CUDA language, it seemed not worth fixing.
+IF(NOT CUDA_FOUND AND NOT NO_CUDA)
   FIND_PACKAGE(CUDA 5.5)
 ENDIF()
 
 IF(MSVC)
   # we want to respect the standard, and we are bored of those **** .
   ADD_DEFINITIONS(-D_CRT_SECURE_NO_DEPRECATE=1)
-  LIST(APPEND CUDA_NVCC_FLAGS "-Xcompiler /wd4819 -Xcompiler /wd4503")
+  LIST(APPEND CUDA_NVCC_FLAGS "-Xcompiler /wd4819 -Xcompiler /wd4503 -Xcompiler /wd4190 -Xcompiler /wd4244 -Xcompiler /wd4251 -Xcompiler /wd4275 -Xcompiler /wd4522")
   ADD_DEFINITIONS(-DTH_EXPORTS)
   IF (NOT NO_CUDA)
     ADD_DEFINITIONS(-DTHC_EXPORTS)
@@ -70,6 +117,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 
 LIST(APPEND CUDA_NVCC_FLAGS -Wno-deprecated-gpu-targets)
+LIST(APPEND CUDA_NVCC_FLAGS --expt-extended-lambda)
 
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   SET(CMAKE_CXX_STANDARD 11)
@@ -123,15 +171,21 @@ IF (APPLE AND CMAKE_COMPILER_IS_GNUCC)
   ENDIF ()
 ENDIF ()
 
-IF (WITH_OPENMP)
+IF (WITH_OPENMP AND NOT CHECKED_OPENMP)
   FIND_PACKAGE(OpenMP)
-  IF(OPENMP_FOUND)
-    MESSAGE(STATUS "Compiling with OpenMP support")
-    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
-  ENDIF(OPENMP_FOUND)
-ENDIF (WITH_OPENMP)
+  SET(CHECKED_OPENMP ON CACHE BOOL "already checked for OpenMP")
+
+  # OPENMP_FOUND is not cached in FindOpenMP.cmake (all other variables are cached)
+  # see https://github.com/Kitware/CMake/blob/master/Modules/FindOpenMP.cmake
+  SET(OPENMP_FOUND ${OPENMP_FOUND} CACHE BOOL "OpenMP Support found")
+ENDIF (WITH_OPENMP AND NOT CHECKED_OPENMP)
+
+IF(OPENMP_FOUND)
+  MESSAGE(STATUS "Compiling with OpenMP support")
+  SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+ENDIF(OPENMP_FOUND)
+
 
 SET(CUDA_ATTACH_VS_BUILD_RULE_TO_CUDA_FILE OFF)
 
@@ -158,16 +212,6 @@ ELSE()
   MESSAGE(STATUS "MAGMA not found. Compiling without MAGMA support")
 ENDIF()
 
-find_package(CuDNN)
-IF(NOT CUDNN_FOUND)
-  MESSAGE(STATUS "CuDNN not found. Compiling without CUDNN support")
-  set(AT_CUDNN_ENABLED 0)
-ELSE()
-  INCLUDE_DIRECTORIES(${CUDNN_INCLUDE_DIRS})
-  set(AT_CUDNN_ENABLED 1)
-ENDIF()
-
-
 # ARM specific flags
 FIND_PACKAGE(ARM)
 IF (ASIMD_FOUND)
@@ -193,6 +237,26 @@ ENDIF(UNIX)
 
 INCLUDE (CheckIncludeFile)
 INCLUDE (CheckCSourceCompiles)
+INCLUDE (CheckCSourceRuns)
+
+# Check that our programs run.  This is different from the native CMake compiler
+# check, which just tests if the program compiles and links.  This is important
+# because with ASAN you might need to help the compiled library find some
+# dynamic libraries.
+CHECK_C_SOURCE_RUNS("
+int main() { return 0; }
+" COMPILER_WORKS)
+IF(NOT COMPILER_WORKS)
+  # Force cmake to retest next time around
+  unset(COMPILER_WORKS CACHE)
+  MESSAGE(FATAL_ERROR
+      "Could not run a simple program built with your compiler. "
+      "If you are trying to use -fsanitize=address, make sure "
+      "libasan is properly installed on your system (you can confirm "
+      "if the problem is this by attempting to build and run a "
+      "small program.)")
+ENDIF()
+
 CHECK_INCLUDE_FILE(cpuid.h HAVE_CPUID_H)
 # Check for a cpuid intrinsic
 IF(HAVE_CPUID_H)
@@ -236,6 +300,7 @@ ENDIF()
 IF(C_SSE3_FOUND)
   MESSAGE(STATUS "SSE3 Found")
   SET(CMAKE_C_FLAGS "${C_SSE3_FLAGS} -DUSE_SSE3 ${CMAKE_C_FLAGS}")
+  SET(CMAKE_CXX_FLAGS "${C_SSE3_FLAGS} -DUSE_SSE3 ${CMAKE_CXX_FLAGS}")
 ENDIF(C_SSE3_FOUND)
 
 # we don't set -mavx and -mavx2 flags globally, but only for specific files
@@ -248,6 +313,7 @@ ENDIF(C_AVX_FOUND)
 IF(C_AVX2_FOUND)
   MESSAGE(STATUS "AVX2 Found")
   SET(CMAKE_C_FLAGS "-DUSE_AVX2 ${CMAKE_C_FLAGS}")
+  SET(CMAKE_CXX_FLAGS "-DUSE_AVX2 ${CMAKE_CXX_FLAGS}")
 ENDIF(C_AVX2_FOUND)
 
 CHECK_C_SOURCE_RUNS("
@@ -331,10 +397,26 @@ MACRO(Install_Required_Library ln)
 ENDMACRO(Install_Required_Library libname)
 
 FIND_PACKAGE(BLAS)
+SET(AT_MKL_ENABLED 0)
+SET(AT_MKL_MT 0)
 IF(BLAS_FOUND)
   SET(USE_BLAS 1)
   IF(BLAS_INFO STREQUAL "mkl")
     ADD_DEFINITIONS(-DTH_BLAS_MKL)
+    IF(NOT BLAS_INCLUDE_DIR)
+      MESSAGE(FATAL_ERROR "MKL is used, but MKL header files are not found. \
+        You can get them by `conda install mkl-include` if using conda (if \
+        it is missing, run `conda upgrade -n root conda` first), and \
+        `pip install mkl-devel` if using pip. If build fails with header files \
+        available in the system, please make sure that CMake will search the \
+        directory containing them, e.g., by setting CMAKE_INCLUDE_PATH.")
+    ENDIF()
+    IF(MSVC AND MKL_LIBRARIES MATCHES ".*libiomp5md\\.lib.*")
+      ADD_DEFINITIONS(-D_OPENMP_NOFORCE_MANIFEST)
+      SET(AT_MKL_MT 1)
+    ENDIF()
+    INCLUDE_DIRECTORIES(${BLAS_INCLUDE_DIR})  # include MKL headers
+    SET(AT_MKL_ENABLED 1)
   ENDIF()
 ENDIF(BLAS_FOUND)
 
@@ -386,6 +468,29 @@ else()
   add_subdirectory(src/THCS)
 endif()
 
+find_package(CuDNN)
+IF(NOT AT_CUDA_ENABLED OR NOT CUDNN_FOUND)
+  MESSAGE(STATUS "CuDNN not found. Compiling without CuDNN support")
+  set(AT_CUDNN_ENABLED 0)
+ELSE()
+  INCLUDE_DIRECTORIES(BEFORE ${CUDNN_INCLUDE_DIRS})
+  set(AT_CUDNN_ENABLED 1)
+ENDIF()
+
+if(NO_MKLDNN)
+  message("disabling MKLDNN because NO_MKLDNN is set")
+  set(AT_MKLDNN_ENABLED 0)
+else()
+  find_package(MKLDNN)
+  if(NOT MKLDNN_FOUND)
+    message(STATUS "MKLDNN not found. Compiling without MKLDNN support")
+    set(AT_MKLDNN_ENABLED 0)
+  else()
+    INCLUDE_DIRECTORIES(${MKLDNN_INCLUDE_DIRS})
+    set(AT_MKLDNN_ENABLED 1)
+  endif()
+endif()
+
 set(cwrap_files
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ATen/Declarations.cwrap
   ${CMAKE_CURRENT_SOURCE_DIR}/src/THNN/generic/THNN.h
@@ -393,9 +498,6 @@ set(cwrap_files
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ATen/nn.yaml
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ATen/native/native_functions.yaml
 )
-if(CUDNN_FOUND)
-  set(cwrap_files ${cwrap_files} ${CMAKE_CURRENT_SOURCE_DIR}/src/ATen/cudnn/cuDNN.yaml)
-endif()
 
 include_directories(
 ${CMAKE_CURRENT_SOURCE_DIR}/src/THNN
@@ -404,6 +506,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/src/THCUNN)
 add_subdirectory(src/ATen)
 include_directories(
 ${CMAKE_CURRENT_SOURCE_DIR}/src
+${CMAKE_CURRENT_SOURCE_DIR}/src/ATen/utils/catch/single_include
 ${CMAKE_CURRENT_BINARY_DIR}/src/ATen)
 if(NOT NO_CUDA)
   include_directories(${CUDA_INCLUDE_DIRS})

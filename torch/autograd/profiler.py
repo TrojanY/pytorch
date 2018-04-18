@@ -1,11 +1,17 @@
-import torch
 import subprocess
+import re
 import os
 import sys
-import copy
-import tempfile
 import itertools
-from collections import defaultdict, namedtuple
+from collections import defaultdict
+
+import torch
+
+try:
+    FileNotFoundError
+except NameError:
+    # py2.7
+    FileNotFoundError = IOError
 
 
 class range(object):
@@ -141,7 +147,7 @@ class profile(object):
         instance should be enabled at any given time.
 
     Example:
-        >>> x = Variable(torch.randn(1, 1), requires_grad=True)
+        >>> x = torch.randn((1, 1), requires_grad=True)
         >>> with torch.autograd.profiler.profile() as prof:
         ...     y = x ** 2
         ...     y.backward()
@@ -196,27 +202,27 @@ class profile(object):
             return '<unfinished torch.autograd.profile>'
         return str(self.function_events)
 
-    def table(self, sort_by=None):
+    def _check_finish(self):
         if self.function_events is None:
             raise RuntimeError("can't export a trace that didn't finish running")
+
+    def table(self, sort_by=None):
+        self._check_finish()
         return self.function_events.table(sort_by)
     table.__doc__ = EventList.table.__doc__
 
     def export_chrome_trace(self, path):
-        if self.function_events is None:
-            raise RuntimeError("can't export a trace that didn't finish running")
+        self._check_finish()
         return self.function_events.export_chrome_trace(path)
     export_chrome_trace.__doc__ = EventList.export_chrome_trace.__doc__
 
     def key_averages(self):
-        if self.function_events is None:
-            raise RuntimeError("can't average a trace that didn't finish running")
+        self._check_finish()
         return self.function_events.key_averages()
     key_averages.__doc__ = EventList.key_averages.__doc__
 
     def total_average(self):
-        if self.function_events is None:
-            raise RuntimeError("can't average a trace that didn't finish running")
+        self._check_finish()
         return self.function_events.total_average()
     total_average.__doc__ = EventList.total_average.__doc__
 
@@ -250,7 +256,7 @@ class emit_nvtx(object):
         ...         model(x)
     """
     def __init__(self, enabled=True):
-        self.enabled = True
+        self.enabled = enabled
         self.entered = False
 
     def __enter__(self):
@@ -386,8 +392,12 @@ def demangle(name):
     """Demangle a C++ identifier using c++filt"""
     try:
         with open(os.devnull, 'w') as devnull:
-            return subprocess.check_output(['c++filt', '-n', name], stderr=devnull).rstrip().decode("ascii")
-    except subprocess.CalledProcessError:
+            is_win = sys.platform == 'win32'
+            filt_cmd = ['undname', name] if is_win else ['c++filt', '-n', name]
+            orig_name = subprocess.check_output(filt_cmd, stderr=devnull).rstrip().decode("ascii")
+            orig_name = re.search('is :- \"(.*)"', orig_name).group(1) if is_win else orig_name
+            return orig_name
+    except (subprocess.CalledProcessError, AttributeError, FileNotFoundError, OSError):
         return name
 
 
@@ -526,7 +536,7 @@ def parse_nvprof_trace(path):
                           row['kernel_start'],
                           row['kernel_end'])
 
-    functions.sort(key=lambda evt: evt.start)
+    functions.sort(key=lambda evt: evt.cpu_interval.start)
     return functions
 
 

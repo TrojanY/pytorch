@@ -37,8 +37,16 @@ def destroy_process_group():
     Destroy the initialized distributed package
     """
     global _backend
+    global _initialized
+    torch._C._dist_destroy_process_group()
     _backend = dist_backend.UNDEFINED
-    return torch._C._dist_destroy_process_group()
+    _initialized = 0
+
+
+def is_initialized():
+    """Checking if the process group has been initialized
+    """
+    return _initialized == _INITIALIZED_PG
 
 
 def init_process_group(backend, init_method='env://', **kwargs):
@@ -87,14 +95,6 @@ def init_process_group(backend, init_method='env://', **kwargs):
     _initialized = _INITIALIZED_PG
 
     if _backend == dist_backend.NCCL:
-        warnings.warn("""
-        ================================================================================
-                                            WARNING
-        ================================================================================
-        NCCL backend is still experimental. The APIs will change without
-        notice and we're can't guarantee full correctness and expected performance yet.
-        We'll announce it once it's ready.
-        """)
         atexit.register(destroy_process_group)
 
     if not torch._C._dist_init_extension(False, reduce_op, group):
@@ -244,23 +244,17 @@ def broadcast_multigpu(tensor_list, src, group=group.WORLD):
     Arguments:
         tensor_list (List[Tensor]): Tensors that participate in the collective
             operation. if ``src`` is the rank, then the first element of
-            tensor_list (tensor_list[0]) will be broadcasted to all other
-            tensors (on different GPUs) in the src process and all tensors in
-            tensor_list of other non-src processes.
+            ``tensor_list`` (``tensor_list[0]``) will be broadcasted to all
+            other tensors (on different GPUs) in the src process and all tensors
+            in ``tensor_list`` of other non-src processes. You also need to make
+            sure that ``len(tensor_list)`` is the same for all the distributed
+            processes calling this function.
+
         src (int): Source rank.
         group (optional): Group of the collective.
     """
     assert torch.distributed._initialized == _INITIALIZED_PG, \
         "collective only supported in process-group mode"
-
-    warnings.warn("""
-    ================================================================================
-                                        WARNING
-    ================================================================================
-    broadcast_multigpu is still experimental. The API will change without
-    notice and we're can't guarantee full correctness and expected performance yet.
-    We'll announce it once it's ready.
-    """)
 
     return torch._C._dist_broadcast_multigpu(tensor_list, src, group)
 
@@ -285,11 +279,11 @@ def broadcast(tensor, src, group=group.WORLD):
 def all_reduce_multigpu(tensor_list, op=reduce_op.SUM, group=group.WORLD):
     """Reduces the tensor data across all machines in such a way that all get
     the final result. This function reduces a number of tensors on every node,
-    while each tensor resides on different GPUs
+    while each tensor resides on different GPUs.
     Therefore, the input tensor in the tensor list needs to be GPU tensors.
     Also, each tensor in the tensor list needs to reside on a different GPU.
 
-    After the call, all ``tensor``s in the tensor list  is going to be bitwise
+    After the call, all ``tensor`` in ``tensor_list`` is going to be bitwise
     identical in all processes.
 
     Only nccl backend is currently supported
@@ -299,21 +293,15 @@ def all_reduce_multigpu(tensor_list, op=reduce_op.SUM, group=group.WORLD):
         tensor list (List[Tensor]): List of input and output tensors of
             the collective. The function operates in-place and requires that
             each tensor to be a GPU tensor on different GPUs.
+            You also need to make sure that ``len(tensor_list)`` is the same for
+            all the distributed processes calling this function.
+
         op (optional): One of the values from ``torch.distributed.reduce_op``
             enum.  Specifies an operation used for element-wise reductions.
         group (optional): Group of the collective.
     """
     assert torch.distributed._initialized == _INITIALIZED_PG, \
         "collective only supported in process-group mode"
-
-    warnings.warn("""
-    ================================================================================
-                                        WARNING
-    ================================================================================
-    all_reduce_multigpu is still experimental. The API will change without
-    notice and we're can't guarantee full correctness and expected performance yet.
-    We'll announce it once it's ready.
-    """)
 
     return torch._C._dist_all_reduce_multigpu(tensor_list, op, group)
 
@@ -338,9 +326,9 @@ def all_reduce(tensor, op=reduce_op.SUM, group=group.WORLD):
 
 def reduce_multigpu(tensor_list, dst, op=reduce_op.SUM, group=group.WORLD):
     """Reduces the tensor data on multiple GPUs across all machines. Each tensor
-    in tensor_list should reside on a separate GPU
+    in ``tensor_list`` should reside on a separate GPU
 
-    Only the GPU of tensor_list[0] on the process with rank ``dst`` is
+    Only the GPU of ``tensor_list[0]`` on the process with rank ``dst`` is
     going to receive the final result.
 
     Only nccl backend is currently supported
@@ -348,7 +336,10 @@ def reduce_multigpu(tensor_list, dst, op=reduce_op.SUM, group=group.WORLD):
 
     Arguments:
         tensor_list (List[Tensor]): Input and output GPU tensors of the
-            collective . The function operates in-place.
+            collective. The function operates in-place.
+            You also need to make sure that ``len(tensor_list)`` is the same for
+            all the distributed processes calling this function.
+
         dst (int): Destination rank
         op (optional): One of the values from ``torch.distributed.reduce_op``
             enum.  Specifies an operation used for element-wise reductions.
@@ -356,15 +347,6 @@ def reduce_multigpu(tensor_list, dst, op=reduce_op.SUM, group=group.WORLD):
     """
     assert torch.distributed._initialized == _INITIALIZED_PG, \
         "collective only supported in process-group mode"
-
-    warnings.warn("""
-    ================================================================================
-                                        WARNING
-    ================================================================================
-    reduce__multigpu is still experimental. The API will change without
-    notice and we're can't guarantee full correctness and expected performance yet.
-    We'll announce it once it's ready.
-    """)
 
     return torch._C._dist_reduce_multigpu(tensor_list, dst, op, group)
 
@@ -391,7 +373,7 @@ def all_gather_multigpu(output_tensor_lists,
                         input_tensor_list,
                         group=group.WORLD):
     """Gathers tensors from the whole group in a list.
-    Each tensor in tensor_list should reside on a separate GPU
+    Each tensor in ``tensor_list`` should reside on a separate GPU
 
     Only nccl backend is currently supported
     tensors should only be GPU tensors
@@ -400,21 +382,27 @@ def all_gather_multigpu(output_tensor_lists,
         output_tensor_lists (List[List[Tensor]]): Output lists. It should
             contain correctly-sized tensors on each GPU to be used for output of
             the collective.
+            e.g. ``output_tensor_lists[i]`` contains the all_gather
+            result that resides on the GPU of ``input_tensor_list[i]``.
+            Note that each element of ``output_tensor_lists[i]`` has the size of
+            ``world_size * len(input_tensor_list)``, since the function all
+            gathers the result from every single GPU in the group. To interpret
+            each element of ``output_tensor_list[i]``, note that
+            ``input_tensor_list[j]`` of rank k will be appear in
+            ``output_tensor_list[i][rank * world_size + j]``
+            Also note that ``len(output_tensor_lists)``, and the size of each
+            element in ``output_tensor_lists`` (each element is a list,
+            therefore ``len(output_tensor_lists[i])``) need to be the same
+            for all the distributed processes calling this function.
+
         input_tensor_list (List[Tensor]): List of tensors(on different GPUs) to
             be broadcast from current process.
+            Note that ``len(input_tensor_list)`` needs to be the same for
+            all the distributed processes calling this function.
         group (optional): Group of the collective.
     """
     assert torch.distributed._initialized == _INITIALIZED_PG, \
         "collective only supported in process-group mode"
-
-    warnings.warn("""
-    ================================================================================
-                                        WARNING
-    ================================================================================
-    all_gather_multigpu is still experimental. The API will change without
-    notice and we're can't guarantee full correctness and expected performance yet.
-    We'll announce it once it's ready.
-    """)
 
     flatten_tensor_list = []
     for output_tensor_list in output_tensor_lists:

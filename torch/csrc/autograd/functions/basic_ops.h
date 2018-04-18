@@ -1,18 +1,18 @@
 #pragma once
 
-#include <Python.h>
-#include <memory>
-#include <string>
-
 #include "torch/csrc/autograd/function.h"
 #include "torch/csrc/autograd/variable.h"
 #include "torch/csrc/autograd/symbolic.h"
 
+#include <memory>
+#include <string>
+#include <vector>
+
 namespace torch { namespace autograd {
 
 struct Error : public Function {
-  Error(std::string msg, FunctionFlags&& flags)
-    : Function(std::move(flags))
+  Error(std::string msg, edge_list&& next_edges)
+    : Function(/*num_inputs=*/0, std::move(next_edges))
     , msg(std::move(msg)) {}
 
   Error(std::string msg)
@@ -34,49 +34,15 @@ struct DelayedError : public Function {
 };
 
 struct GraphRoot : public Function {
-  GraphRoot(function_list functions, variable_list inputs)
-    : outputs(std::move(inputs)) {
-      next_functions = std::move(functions);
-    };
+  GraphRoot(edge_list functions, variable_list inputs)
+      : Function(/*num_inputs=*/0, std::move(functions)),
+        outputs(std::move(inputs)) {}
 
   virtual variable_list apply(const variable_list& inputs) {
     return outputs;
   }
 
   variable_list outputs;
-};
-
-struct Add : public ForwardFunction<true>, public HasSymbolic {
-  Add() {}
-
-  virtual variable_list apply(const variable_list& inputs) override;
-  virtual jit::value_list symbolic(
-      SymbolicContext* ctx,
-      jit::value_list inputs,
-      std::shared_ptr<jit::SourceLocation> sl
-  ) override;
-};
-
-
-struct AddBackward_Deprecated : public Function {
-  AddBackward_Deprecated(FunctionFlags&& flags)
-    : Function(std::move(flags)) {}
-
-  virtual variable_list apply(const variable_list& gradOutputs) override;
-  virtual bool is_traceable() override { return true; }
-};
-
-struct Mul : public ForwardFunction<> {
-  Mul() {}
-
-  virtual variable_list apply(const variable_list& inputs) override;
-};
-
-struct MulBackward : public Function {
-  MulBackward(FunctionFlags&& flags)
-    : Function(std::move(flags)) {}
-
-  virtual variable_list apply(const variable_list& gradOutputs) override;
 };
 
 }}

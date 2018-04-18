@@ -7,6 +7,7 @@
 #include "torch/csrc/utils/python_strings.h"
 #include "THDP.h"
 #include "torch/csrc/PythonTypes.h"
+#include "torch/csrc/autograd/python_variable.h"
 
 #ifdef WITH_CUDA
 #include "torch/csrc/cuda/Stream.h"
@@ -32,7 +33,7 @@ static bool THDPModule_loadClasses(PyObject *self)
 
   if (!THDPDoubleTensor_postInit(torch_module)) return false;
   if (!THDPFloatTensor_postInit(torch_module)) return false;
-  //if (!THDPHalfTensor_postInit(torch_module)) return false;
+  if (!THDPHalfTensor_postInit(torch_module)) return false;
   if (!THDPLongTensor_postInit(torch_module)) return false;
   if (!THDPIntTensor_postInit(torch_module)) return false;
   if (!THDPShortTensor_postInit(torch_module)) return false;
@@ -41,7 +42,7 @@ static bool THDPModule_loadClasses(PyObject *self)
 
   ASSERT_NOT_NULL(THDPDoubleStorageClass = PyObject_GetAttrString(torch_module,(char*)"DoubleStorage"));
   ASSERT_NOT_NULL(THDPFloatStorageClass  = PyObject_GetAttrString(torch_module,(char*)"FloatStorage"));
-  //ASSERT_NOT_NULL(THDPHalfStorageClass   = PyObject_GetAttrString(torch_module,(char*)"HalfStorage"));
+  ASSERT_NOT_NULL(THDPHalfStorageClass   = PyObject_GetAttrString(torch_module,(char*)"HalfStorage"));
   ASSERT_NOT_NULL(THDPLongStorageClass   = PyObject_GetAttrString(torch_module,(char*)"LongStorage"));
   ASSERT_NOT_NULL(THDPIntStorageClass    = PyObject_GetAttrString(torch_module,(char*)"IntStorage"));
   ASSERT_NOT_NULL(THDPShortStorageClass  = PyObject_GetAttrString(torch_module,(char*)"ShortStorage"));
@@ -67,7 +68,7 @@ static bool THDPModule_assignStateless(PyObject *self)
   PyObject *stateless;
   INIT_STATELESS(Double);
   INIT_STATELESS(Float);
-  //INIT_STATELESS(Half);
+  INIT_STATELESS(Half);
   INIT_STATELESS(Long);
   INIT_STATELESS(Int);
   INIT_STATELESS(Short);
@@ -193,36 +194,9 @@ extern PyObject* THCPCharTensorClass;
 extern PyObject* THCPByteTensorClass;
 #endif
 
-THDTensorDescriptor THDPModule_makeDescriptor(PyObject *obj)
-{
-  PyObject *type = (PyObject*)Py_TYPE(obj);
-#define REGISTER_TH_DESCRIPTOR(TYPE)                                           \
-  if (type == THP##TYPE##Class)                                                \
-    return THDTensorDescriptor_newFromTH##TYPE(((THP##TYPE*)obj)->cdata);
-  REGISTER_TH_DESCRIPTOR(DoubleTensor);
-  REGISTER_TH_DESCRIPTOR(FloatTensor);
-  REGISTER_TH_DESCRIPTOR(LongTensor);
-  REGISTER_TH_DESCRIPTOR(IntTensor);
-  REGISTER_TH_DESCRIPTOR(ShortTensor);
-  REGISTER_TH_DESCRIPTOR(CharTensor);
-  REGISTER_TH_DESCRIPTOR(ByteTensor);
-#undef REGISTER_TH_DESCRIPTOR
-#ifdef WITH_CUDA
-#define REGISTER_THC_DESCRIPTOR(TYPE)                                           \
-  if (type == THCP##TYPE##Class)                                                \
-    return THDTensorDescriptor_newFromTHCuda##TYPE((THCuda##TYPE*)(((torch::THPVoidTensor*)obj)->cdata));
-  REGISTER_THC_DESCRIPTOR(DoubleTensor);
-  if (type == THCPFloatTensorClass)
-    return THDTensorDescriptor_newFromTHCudaFloatTensor((THCudaTensor*)(((torch::THPVoidTensor*)obj)->cdata));
-  REGISTER_THC_DESCRIPTOR(LongTensor);
-  REGISTER_THC_DESCRIPTOR(IntTensor);
-  REGISTER_THC_DESCRIPTOR(ShortTensor);
-  REGISTER_THC_DESCRIPTOR(CharTensor);
-  REGISTER_THC_DESCRIPTOR(ByteTensor);
-#undef REGISTER_THC_DESCRIPTOR
-#endif
-  throw std::runtime_error(std::string("don't know how to create a THDTensorDesciptor for "
-      "type ") + std::string(THPUtils_typename(obj)));
+THDTensorDescriptor THDPModule_makeDescriptor(PyObject *obj) {
+  auto var = (THPVariable*)obj;
+  return var->cdata.data();
 }
 
 static THDRequest* _unpackRequest(PyObject *obj)
@@ -272,7 +246,7 @@ PyObject* THDPModule_clearGroupCache(PyObject *_unused, PyObject *args) {
 PyObject* THDPModule_isend(PyObject *_unused, PyObject *args)
 {
   HANDLE_TH_ERRORS
-  if (PyTuple_GET_SIZE(args) != 2 || !THPModule_isTensor(PyTuple_GET_ITEM(args, 0)) ||
+  if (PyTuple_GET_SIZE(args) != 2 || !THPVariable_Check(PyTuple_GET_ITEM(args, 0)) ||
         !THPUtils_checkLong(PyTuple_GET_ITEM(args, 1))) {
     THPUtils_invalidArguments(args, NULL, "isend", 1, "(tensor input, int dst_rank)");
     return NULL;
@@ -292,7 +266,7 @@ PyObject* THDPModule_isend(PyObject *_unused, PyObject *args)
 PyObject* THDPModule_irecv(PyObject *_unused, PyObject *args)
 {
   HANDLE_TH_ERRORS
-  if (PyTuple_GET_SIZE(args) != 2 || !THPModule_isTensor(PyTuple_GET_ITEM(args, 0)) ||
+  if (PyTuple_GET_SIZE(args) != 2 || !THPVariable_Check(PyTuple_GET_ITEM(args, 0)) ||
         !THPUtils_checkLong(PyTuple_GET_ITEM(args, 1))) {
     THPUtils_invalidArguments(args, NULL, "irecv", 1, "(tensor output, int src_rank)");
     return NULL;
@@ -312,7 +286,7 @@ PyObject* THDPModule_irecv(PyObject *_unused, PyObject *args)
 PyObject* THDPModule_send(PyObject *_unused, PyObject *args)
 {
   HANDLE_TH_ERRORS
-  if (PyTuple_GET_SIZE(args) != 2 || !THPModule_isTensor(PyTuple_GET_ITEM(args, 0)) ||
+  if (PyTuple_GET_SIZE(args) != 2 || !THPVariable_Check(PyTuple_GET_ITEM(args, 0)) ||
         !THPUtils_checkLong(PyTuple_GET_ITEM(args, 1))) {
     THPUtils_invalidArguments(args, NULL, "send", 1, "(tensor input, int dst_rank)");
     return NULL;
@@ -331,7 +305,7 @@ PyObject* THDPModule_send(PyObject *_unused, PyObject *args)
 PyObject* THDPModule_recvAnySource(PyObject *_unused, PyObject *_tensor)
 {
   HANDLE_TH_ERRORS
-  if (!THPModule_isTensor(_tensor)) {
+  if (!THPVariable_Check(_tensor)) {
     THPUtils_invalidArguments(_tensor, NULL, "recv", 1, "(tensor output)");
     return NULL;
   }
@@ -349,7 +323,7 @@ PyObject* THDPModule_recvAnySource(PyObject *_unused, PyObject *_tensor)
 PyObject* THDPModule_recv(PyObject *_unused, PyObject *args)
 {
   HANDLE_TH_ERRORS
-  if (PyTuple_GET_SIZE(args) != 2 || !THPModule_isTensor(PyTuple_GET_ITEM(args, 0)) ||
+  if (PyTuple_GET_SIZE(args) != 2 || !THPVariable_Check(PyTuple_GET_ITEM(args, 0)) ||
         !THPUtils_checkLong(PyTuple_GET_ITEM(args, 1))) {
     THPUtils_invalidArguments(args, NULL, "recv", 1, "(tensor output, int src_rank)");
     return NULL;
@@ -396,7 +370,7 @@ PyObject* THDPModule_allReduceMultiGPU(PyObject *_unused, PyObject *args)
   descriptors.reserve(length);
 
   for (std::size_t i = 0; i < length; ++i) {
-    if (!THPModule_isTensor(PySequence_Fast_GET_ITEM(sequence.get(), i))) {
+    if (!THPVariable_Check(PySequence_Fast_GET_ITEM(sequence.get(), i))) {
       goto invalid_arguments;
     }
 
@@ -452,7 +426,7 @@ PyObject* THDPModule_reduceMultiGPU(PyObject *_unused, PyObject *args)
   descriptors.reserve(length);
 
   for (std::size_t i = 0; i < length; ++i) {
-    if (!THPModule_isTensor(PySequence_Fast_GET_ITEM(sequence.get(), i))) {
+    if (!THPVariable_Check(PySequence_Fast_GET_ITEM(sequence.get(), i))) {
       goto invalid_arguments;
     }
 
@@ -509,7 +483,7 @@ PyObject* THDPModule_broadcastMultiGPU(PyObject *_unused, PyObject *args)
   descriptors.reserve(length);
 
   for (std::size_t i = 0; i < length; ++i) {
-    if (!THPModule_isTensor(PySequence_Fast_GET_ITEM(sequence.get(), i))) {
+    if (!THPVariable_Check(PySequence_Fast_GET_ITEM(sequence.get(), i))) {
       goto invalid_arguments;
     }
 
@@ -582,8 +556,8 @@ PyObject* THDPModule_allGatherMultiGPU(PyObject *_unused, PyObject *args)
 
   // Get the input list
   for (size_t i = 0; i < length_two; ++i) {
-    if (!THPModule_isTensor(PySequence_Fast_GET_ITEM(sequence_two.get(), i)) ||
-        !THPModule_isTensor(PySequence_Fast_GET_ITEM(sequence_one.get(), i))) {
+    if (!THPVariable_Check(PySequence_Fast_GET_ITEM(sequence_two.get(), i)) ||
+        !THPVariable_Check(PySequence_Fast_GET_ITEM(sequence_one.get(), i))) {
       goto invalid_arguments;
     }
 
@@ -620,7 +594,7 @@ invalid_arguments:
 PyObject* THDPModule_allReduce(PyObject *_unused, PyObject *args)
 {
   HANDLE_TH_ERRORS
-  if (PyTuple_GET_SIZE(args) != 3 || !THPModule_isTensor(PyTuple_GET_ITEM(args, 0))) {
+  if (PyTuple_GET_SIZE(args) != 3 || !THPVariable_Check(PyTuple_GET_ITEM(args, 0))) {
     THPUtils_invalidArguments(args, NULL, "all_reduce", 1, "(tensor in_out, reduce_op op, group gr)");
     return NULL;
   }
@@ -639,7 +613,7 @@ PyObject* THDPModule_allReduce(PyObject *_unused, PyObject *args)
 PyObject* THDPModule_reduce(PyObject *_unused, PyObject *args)
 {
   HANDLE_TH_ERRORS
-  if (PyTuple_GET_SIZE(args) != 4 || !THPModule_isTensor(PyTuple_GET_ITEM(args, 0)) ||
+  if (PyTuple_GET_SIZE(args) != 4 || !THPVariable_Check(PyTuple_GET_ITEM(args, 0)) ||
         !THPUtils_checkLong(PyTuple_GET_ITEM(args, 1))) {
     THPUtils_invalidArguments(args, NULL, "reduce", 1,
         "(tensor reduced, int dst_rank, reduce_op op, group gr)");
@@ -661,7 +635,7 @@ PyObject* THDPModule_reduce(PyObject *_unused, PyObject *args)
 PyObject* THDPModule_broadcast(PyObject *_unused, PyObject *args)
 {
   HANDLE_TH_ERRORS
-  if (PyTuple_GET_SIZE(args) != 3 || !THPModule_isTensor(PyTuple_GET_ITEM(args, 0)) ||
+  if (PyTuple_GET_SIZE(args) != 3 || !THPVariable_Check(PyTuple_GET_ITEM(args, 0)) ||
         !THPUtils_checkLong(PyTuple_GET_ITEM(args, 1))) {
     THPUtils_invalidArguments(args, NULL, "broadcast", 1,
         "(tensor src_dst, int src_rank, group gr)");
@@ -691,7 +665,7 @@ PyObject* THDPModule_allGather(PyObject *_unused, PyObject *args)
 
   if (PyTuple_GET_SIZE(args) != 3 ||
       !PySequence_Check(PyTuple_GET_ITEM(args, 0)) ||
-      !THPModule_isTensor(PyTuple_GET_ITEM(args, 1))) {
+      !THPVariable_Check(PyTuple_GET_ITEM(args, 1))) {
 
     goto invalid_arguments;
   }
@@ -707,7 +681,7 @@ PyObject* THDPModule_allGather(PyObject *_unused, PyObject *args)
   descriptors.reserve(length);
 
   for (std::size_t i = 0; i < length; ++i) {
-    if (!THPModule_isTensor(PySequence_Fast_GET_ITEM(sequence.get(), i)))
+    if (!THPVariable_Check(PySequence_Fast_GET_ITEM(sequence.get(), i)))
       goto invalid_arguments;
 
     descriptors.push_back(
@@ -734,7 +708,7 @@ invalid_arguments:
 PyObject* THDPModule_gatherSend(PyObject *_unused, PyObject *args)
 {
   HANDLE_TH_ERRORS
-  if (PyTuple_GET_SIZE(args) != 3 || !THPModule_isTensor(PyTuple_GET_ITEM(args, 0))) {
+  if (PyTuple_GET_SIZE(args) != 3 || !THPVariable_Check(PyTuple_GET_ITEM(args, 0))) {
     THPUtils_invalidArguments(args, NULL, "gatherSend", 1,
         "(tensor input, int dst_rank, group gr)");
     return NULL;
@@ -763,7 +737,7 @@ PyObject* THDPModule_gatherRecv(PyObject *_unused, PyObject *args)
 
   if (PyTuple_GET_SIZE(args) != 3 ||
       !PySequence_Check(PyTuple_GET_ITEM(args, 0)) ||
-      !THPModule_isTensor(PyTuple_GET_ITEM(args, 1))) {
+      !THPVariable_Check(PyTuple_GET_ITEM(args, 1))) {
     goto invalid_arguments;
   }
 
@@ -778,7 +752,7 @@ PyObject* THDPModule_gatherRecv(PyObject *_unused, PyObject *args)
   descriptors.reserve(length);
 
   for (std::size_t i = 0; i < length; ++i) {
-    if (!THPModule_isTensor(PySequence_Fast_GET_ITEM(sequence.get(), i)))
+    if (!THPVariable_Check(PySequence_Fast_GET_ITEM(sequence.get(), i)))
       goto invalid_arguments;
 
     descriptors.push_back(
@@ -814,7 +788,7 @@ PyObject* THDPModule_scatterSend(PyObject *_unused, PyObject *args)
 
   if (PyTuple_GET_SIZE(args) != 3 ||
       !PySequence_Check(PyTuple_GET_ITEM(args, 0)) ||
-      !THPModule_isTensor(PyTuple_GET_ITEM(args, 1))) {
+      !THPVariable_Check(PyTuple_GET_ITEM(args, 1))) {
     goto invalid_arguments;
   }
 
@@ -829,7 +803,7 @@ PyObject* THDPModule_scatterSend(PyObject *_unused, PyObject *args)
   descriptors.reserve(length);
 
   for (std::size_t i = 0; i < length; ++i) {
-    if (!THPModule_isTensor(PySequence_Fast_GET_ITEM(sequence.get(), i)))
+    if (!THPVariable_Check(PySequence_Fast_GET_ITEM(sequence.get(), i)))
       goto invalid_arguments;
 
     descriptors.push_back(
@@ -856,7 +830,7 @@ invalid_arguments:
 PyObject* THDPModule_scatterRecv(PyObject *_unused, PyObject *args)
 {
   HANDLE_TH_ERRORS
-  if (PyTuple_GET_SIZE(args) != 3 || !THPModule_isTensor(PyTuple_GET_ITEM(args, 0)) ||
+  if (PyTuple_GET_SIZE(args) != 3 || !THPVariable_Check(PyTuple_GET_ITEM(args, 0)) ||
         !THPUtils_checkLong(PyTuple_GET_ITEM(args, 1))) {
     THPUtils_invalidArguments(args, NULL, "scatterRecv", 1,
         "(tensor output, int src_rank, group gr)");

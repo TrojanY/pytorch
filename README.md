@@ -23,9 +23,9 @@ We are in an early-release beta. Expect some adventures and rough edges.
 
 | System | 2.7 | 3.5 |
 | --- | --- | --- |
-| Linux CPU | [![Build Status](https://travis-ci.org/pytorch/pytorch.svg?branch=master)](https://travis-ci.org/pytorch/pytorch) | [![Build Status](https://travis-ci.org/pytorch/pytorch.svg?branch=master)](https://travis-ci.org/pytorch/pytorch) |
-| Linux GPU | [![Build Status](http://build.pytorch.org:8080/buildStatus/icon?job=pytorch-master-py2-linux)](https://build.pytorch.org/job/pytorch-master-py2-linux) | [![Build Status](http://build.pytorch.org:8080/buildStatus/icon?job=pytorch-master-py3-linux)](https://build.pytorch.org/job/pytorch-master-py3-linux) |
-| macOS CPU | [![Build Status](http://build.pytorch.org:8080/buildStatus/icon?job=pytorch-master-py2-osx-cpu)](https://build.pytorch.org/job/pytorch-master-py2-osx-cpu) | [![Build Status](http://build.pytorch.org:8080/buildStatus/icon?job=pytorch-master-py3-osx-cpu)](https://build.pytorch.org/job/pytorch-master-py3-osx-cpu) |
+| Linux CPU | [![Build Status](https://ci.pytorch.org/jenkins/job/pytorch-master/badge/icon)](https://ci.pytorch.org/jenkins/job/pytorch-master/) | [![Build Status](https://ci.pytorch.org/jenkins/job/pytorch-master/badge/icon)](https://ci.pytorch.org/jenkins/job/pytorch-master/) |
+| Linux GPU | [![Build Status](https://ci.pytorch.org/jenkins/job/pytorch-master/badge/icon)](https://ci.pytorch.org/jenkins/job/pytorch-master/) | [![Build Status](https://ci.pytorch.org/jenkins/job/pytorch-master/badge/icon)](https://ci.pytorch.org/jenkins/job/pytorch-master/) |
+| Windows GPU | <center>—</center> | [![Build Status](https://ci.pytorch.org/jenkins/job/pytorch-builds/job/pytorch-win-ws2016-cuda9-cudnn7-py3-trigger/badge/icon)](https://ci.pytorch.org/jenkins/job/pytorch-builds/job/pytorch-win-ws2016-cuda9-cudnn7-py3-trigger/)
 
 
 ## More about PyTorch
@@ -163,6 +163,9 @@ If you want to compile with CUDA support, install
 - [NVIDIA cuDNN](https://developer.nvidia.com/cudnn) v6.x or above
 
 If you want to disable CUDA support, export environment variable `NO_CUDA=1`.
+Other potentially useful environment variables may be found in `setup.py`.
+
+If you want to build on Windows, Visual Studio 2017 and NVTX are also needed.
 
 #### Install optional dependencies
 
@@ -171,20 +174,26 @@ On Linux
 export CMAKE_PREFIX_PATH="$(dirname $(which conda))/../" # [anaconda root directory]
 
 # Install basic dependencies
-conda install numpy pyyaml mkl setuptools cmake cffi
+conda install numpy pyyaml mkl mkl-include setuptools cmake cffi typing
 
 # Add LAPACK support for the GPU
-conda install -c soumith magma-cuda80 # or magma-cuda75 if CUDA 7.5
+conda install -c pytorch magma-cuda80 # or magma-cuda90 if CUDA 9
 ```
 
 On macOS
 ```bash
 export CMAKE_PREFIX_PATH=[anaconda root directory]
-conda install numpy pyyaml setuptools cmake cffi
+conda install numpy pyyaml mkl mkl-include setuptools cmake cffi typing
+```
+
+On Windows
+```cmd
+conda install numpy pyyaml mkl mkl-include setuptools cmake cffi typing
 ```
 #### Get the PyTorch source
 ```bash
 git clone --recursive https://github.com/pytorch/pytorch
+cd pytorch
 ```
 
 #### Install PyTorch
@@ -198,19 +207,27 @@ On macOS
 MACOSX_DEPLOYMENT_TARGET=10.9 CC=clang CXX=clang++ python setup.py install
 ```
 
+On Windows
+```cmd
+set "VS150COMNTOOLS=C:\Program Files (x86)\Microsoft Visual Studio\2017\Enterprise\VC\Auxiliary\Build"
+set CMAKE_GENERATOR=Visual Studio 15 2017 Win64
+set DISTUTILS_USE_SDK=1
+REM The following line is needed for Python 2.7, but the support for it is very experimental.
+set MSSdk=1
+
+call "%VS150COMNTOOLS%\vcvarsall.bat" x64 -vcvars_ver=14.11
+python setup.py install
+```
+
 ### Docker image
 
-Dockerfile is supplied to build images with cuda support and cudnn v6. Build as usual
+Dockerfile is supplied to build images with cuda support and cudnn v7. Build as usual
 ```
-docker build -t pytorch .
+docker build -t pytorch -f docker/pytorch/Dockerfile .
 ```
 
-Dockerfile to build with cuda 9 and cudnn v7 (with Volta support) is in tools/docker, the build command is
-
-```
-docker build -t pytorch_cuda9 -f tools/docker/Dockerfile9 .
-```
-Alternatively, if you want to use a runtime image, you can use the pre-built one from Docker Hub and run with nvidia-docker:
+You can also pull a pre-built docker image from Docker Hub and run with nvidia-docker,
+but this is not currently maintained and will pull PyTorch 0.2.
 ```
 nvidia-docker run --rm -ti --ipc=host pytorch/pytorch:latest
 ```
@@ -240,7 +257,7 @@ Three pointers to get you started:
 ## Releases and Contributing
 
 PyTorch has a 90 day release cycle (major releases).
-It's current state is Beta, we expect no obvious bugs. Please let us know if you encounter a bug by [filing an issue](https://github.com/pytorch/pytorch/issues).
+Its current state is Beta, we expect no obvious bugs. Please let us know if you encounter a bug by [filing an issue](https://github.com/pytorch/pytorch/issues).
 
 We appreciate all contributions. If you are planning to contribute back bug-fixes, please do so without any further discussion.
 

@@ -222,15 +222,79 @@ THCTensor *THCTensor_(newUnfold)(THCState *state, THCTensor *tensor, int dimensi
   return self;
 }
 
+// Also sets new_stride if viewable.
+//
+// On a high level,
+// 1. separate tensor->size into chunks of dimensions, where the dimensions are
+//    ``contiguous'' in each chunk, i.e., stride[i] = size[i+1] * stride[i+1]
+// 2. view_size must be able to be separated into same number of chunks, where
+//    each chunk pair has matching ``numel'', i.e., number of subspaces.
+static int THCTensor_(isViewable)(THCState *state, THCTensor *tensor, THLongStorage *view_size, THLongStorage *new_stride) {
+  // dim indices
+  int64_t tensor_d = tensor->nDimension - 1;
+  if (tensor_d < 0) {
+    return 1;
+  }
+  int64_t view_d = view_size->size - 1;
+  // stride for each subspace in the chunk
+  int64_t chunk_base_stride = tensor->stride[tensor_d];
+  // numel in current chunk
+  int64_t tensor_numel = 1;
+  int64_t view_numel = 1;
+  for (; tensor_d >= 0; tensor_d--) {
+    tensor_numel *= tensor->size[tensor_d];
+    // if end of tensor size chunk, check view
+    if ((tensor_d == 0) ||
+        (tensor->size[tensor_d - 1] != 1 && tensor->stride[tensor_d - 1] != tensor_numel * chunk_base_stride)) {
+      while (view_d >= 0 && (view_numel < tensor_numel || view_size->data[view_d] == 1)) {
+        new_stride->data[view_d] = view_numel * chunk_base_stride;
+        view_numel *= view_size->data[view_d];
+        view_d--;
+      }
+      if (view_numel != tensor_numel) {
+        return 0;
+      }
+      if (tensor_d > 0) {
+        chunk_base_stride = tensor->stride[tensor_d - 1];
+        tensor_numel = 1;
+        view_numel = 1;
+      }
+    }
+  }
+  // check that we iterated through all view size
+  return view_d == -1;
+}
+
 THCTensor *THCTensor_(newView)(THCState *state, THCTensor *tensor, THLongStorage *size)
 {
-  THArgCheck(THCTensor_(isContiguous)(state, tensor), 2, "input is not contiguous");
   ptrdiff_t numel = THCTensor_(nElement)(state, tensor);
   THCTensor *self = THCTensor_(new)(state);
   THLongStorage *inferred_size = THLongStorage_newInferSize(size, numel);
-  THCTensor_(setStorage)(state, self, tensor->storage, tensor->storageOffset, inferred_size, NULL);
+  THLongStorage *new_stride = THLongStorage_newWithSize(size->size);
+  THArgCheck(THCTensor_(isViewable)(state, tensor, inferred_size, new_stride), 2, "View size is "
+    "not compatible with input tensor's size and stride (at least one dimension spans "
+    "across two contiguous subspaces). Call .contiguous() before .view().");
+  THCTensor_(setStorage)(state, self, tensor->storage, tensor->storageOffset, inferred_size, new_stride);
   THLongStorage_free(inferred_size);
+  THLongStorage_free(new_stride);
   return self;
+}
+
+// Collapses the first two dimensions of a tensor.
+// Assumes the input tensor is contiguous.
+THCTensor *THCTensor_(newFoldBatchDim)(THCState *state, THCTensor *input) {
+  int in_dims = THCTensor_(nDimension)(state, input);
+  THArgCheck(in_dims >= 2, 1, "Tensor needs to have at least two dimensions");
+  THArgCheck(THCTensor_(isContiguous)(state, input), 1,
+             "Tensor must be contiguous");
+  THLongStorage *newSize = THLongStorage_newWithSize(in_dims - 1);
+  newSize->data[0] = THCTensor_(size)(state, input, 0) * THCTensor_(size)(state, input, 1);
+  for (int i = 2; i < in_dims; i++) {
+    newSize->data[i - 1] = THCTensor_(size)(state, input, i);
+  }
+  THCTensor *output = THCTensor_(newView)(state, input, newSize);
+  THLongStorage_free(newSize);
+  return output;
 }
 
 /* Resize */
@@ -291,81 +355,6 @@ void THCTensor_(resize5d)(THCState *state, THCTensor *self, int64_t size0, int64
     int64_t size[5] = {size0, size1, size2, size3, size4};
 
   THCTensor_(resizeNd)(state, self, 5, size, NULL);
-}
-
-THCTensor* THCTensor_(newExpand)(THCState *state, THCTensor *tensor, THLongStorage *sizes)
-{
-  THCTensor *result = THCTensor_(new)(state);
-  THCTensor_(expand)(state, result, tensor, sizes);
-  return result;
-}
-
-void THCTensor_(expand)(THCState *state, THCTensor *r, THCTensor *tensor, THLongStorage *sizes)
-{
-  THArgCheck(THCTensor_(nDimension)(state, tensor) > 0 || THLongStorage_size(sizes) == 0, 0,
-	     "can't expand an empty tensor");
-  THArgCheck(THLongStorage_size(sizes) >= THCTensor_(nDimension)(state, tensor), 1,
-             "the number of sizes provided must be greater or equal to the "
-             "number of dimensions in the tensor");
-
-  int64_t *expandedSizes;
-  int64_t *expandedStrides;
-  char error_buffer[1024];
-  int ret = THLongStorage_inferExpandGeometry(tensor->size,
-                                              tensor->stride,
-                                              THCTensor_(nDimension)(state, tensor),
-                                              sizes,
-                                              &expandedSizes,
-                                              &expandedStrides,
-                                              error_buffer,
-                                              1024);
-  if (ret != 0) {
-    THError(error_buffer);
-    return;
-  }
-  THCTensor_(setStorageNd)(state, r, THCTensor_(storage)(state, tensor), THCTensor_(storageOffset)(state, tensor),
-                           THLongStorage_size(sizes), expandedSizes, expandedStrides);
-  THFree(expandedSizes);
-  THFree(expandedStrides);
-}
-
-void THCTensor_(expandNd)(THCState *state, THCTensor **rets, THCTensor **ops, int count) {
-  for (int i = 0; i < count; ++i) {
-    THArgCheck(THCTensor_(nDimension)(state, ops[i]) > 0, i, "can't expand empty tensor %d", i);
-  }
-
-  int64_t **op_sizes = (int64_t **)THAlloc(count * sizeof(int64_t *));
-  int64_t *op_dims = (int64_t *)THAlloc(count * sizeof(int64_t));
-
-  for (int i = 0; i < count; ++i) {
-    op_sizes[i] = ops[i]->size;
-    op_dims[i] = ops[i]->nDimension;
-  }
-
-  THLongStorage *sizes = THLongStorage_new();
-  char error_buffer[1024];
-  int ret = THLongStorage_inferSizeN(sizes,
-                                     count,
-                                     op_sizes,
-                                     op_dims,
-                                     error_buffer,
-                                     1024);
-
-  if(ret != 0) {
-    THLongStorage_free(sizes);
-    THFree(op_sizes);
-    THFree(op_dims);
-    THError(error_buffer);
-    return;
-  }
-
-  for (int i = 0; i < count; ++i) {
-    THCTensor_(expand)(state, rets[i], ops[i], sizes);
-  }
-
-  THLongStorage_free(sizes);
-  THFree(op_sizes);
-  THFree(op_dims);
 }
 
 void THCTensor_(set)(THCState *state, THCTensor *self, THCTensor *src)
@@ -740,7 +729,7 @@ void THCTensor_(freeCopyTo)(THCState *state, THCTensor *self, THCTensor *dst)
 static void THCTensor_(rawInit)(THCState *state, THCTensor *self)
 {
   self->refcount = 1;
-  self->storage = NULL;
+  self->storage = THCStorage_(new)(state);
   self->storageOffset = 0;
   self->size = NULL;
   self->stride = NULL;
@@ -762,7 +751,7 @@ void THCTensor_(setStorageNd)(THCState *state, THCTensor *self, THCStorage *stor
       THCStorage_(retain)(state, self->storage);
     }
     else
-      self->storage = NULL;
+      self->storage = THCStorage_(new)(state);
   }
 
   /* storageOffset */

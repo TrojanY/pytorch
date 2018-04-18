@@ -23,6 +23,14 @@ class SparseAdam(Optimizer):
     """
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8):
+        if not 0.0 < lr:
+            raise ValueError("Invalid learning rate: {}".format(lr))
+        if not 0.0 < eps:
+            raise ValueError("Invalid epsilon value: {}".format(eps))
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError("Invalid beta parameter at index 0: {}".format(betas[0]))
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
         defaults = dict(lr=lr, betas=betas, eps=eps)
         super(SparseAdam, self).__init__(params, defaults)
 
@@ -83,7 +91,8 @@ class SparseAdam(Optimizer):
 
                 # Dense addition again is intended, avoiding another _sparse_mask
                 numer = exp_avg_update_values.add_(old_exp_avg_values)
-                denom = exp_avg_sq_update_values.add_(old_exp_avg_sq_values).sqrt_().add_(group['eps'])
+                exp_avg_sq_update_values.add_(old_exp_avg_sq_values)
+                denom = exp_avg_sq_update_values.sqrt_().add_(group['eps'])
                 del exp_avg_update_values, exp_avg_sq_update_values
 
                 bias_correction1 = 1 - beta1 ** state['step']

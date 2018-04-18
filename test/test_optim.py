@@ -1,3 +1,4 @@
+import math
 import unittest
 import functools
 from copy import deepcopy
@@ -8,7 +9,7 @@ import torch.nn.functional as F
 from torch.optim import SGD
 from torch.autograd import Variable
 from torch import sparse
-from torch.optim.lr_scheduler import LambdaLR, StepLR, MultiStepLR, ExponentialLR, ReduceLROnPlateau
+from torch.optim.lr_scheduler import LambdaLR, StepLR, MultiStepLR, ExponentialLR, CosineAnnealingLR, ReduceLROnPlateau
 from common import TestCase, run_tests
 
 
@@ -66,6 +67,7 @@ class TestOptim(TestCase):
 
         params = Variable(params_t, requires_grad=True)
         optimizer = constructor([params])
+
         if not sparse_only:
             params_c = Variable(params_t.clone(), requires_grad=True)
             optimizer_c = constructor([params_c])
@@ -112,6 +114,9 @@ class TestOptim(TestCase):
         input = Variable(input)
         optimizer = constructor(weight, bias)
 
+        # to check if the optimizer can be printed as a string
+        optimizer.__repr__()
+
         def fn():
             optimizer.zero_grad()
             y = weight.mv(input)
@@ -121,10 +126,10 @@ class TestOptim(TestCase):
             loss.backward()
             return loss
 
-        initial_value = fn().data[0]
+        initial_value = fn().item()
         for i in range(200):
             optimizer.step(fn)
-        self.assertLess(fn().data[0], initial_value)
+        self.assertLess(fn().item(), initial_value)
 
     def _test_state_dict(self, weight, bias, input, constructor):
         weight = Variable(weight, requires_grad=True)
@@ -176,6 +181,7 @@ class TestOptim(TestCase):
         state_dict = deepcopy(optimizer.state_dict())
         state_dict_c = deepcopy(optimizer.state_dict())
         optimizer_cuda.load_state_dict(state_dict_c)
+
         # Make sure state dict wasn't modified
         self.assertEqual(state_dict, state_dict_c)
 
@@ -254,6 +260,12 @@ class TestOptim(TestCase):
                 self._build_params_dict_single(weight, bias, lr=1e-2),
                 lr=1e-3)
         )
+        self._test_basic_cases(
+            lambda weight, bias: optim.SGD(
+                self._build_params_dict_single(weight, bias, lr=1e-2))
+        )
+        with self.assertRaisesRegex(ValueError, "Invalid momentum value: -0.5"):
+            optim.SGD(None, lr=1e-2, momentum=-0.5)
 
     def test_sgd_sparse(self):
         self._test_rosenbrock_sparse(
@@ -277,12 +289,25 @@ class TestOptim(TestCase):
                 self._build_params_dict(weight, bias, lr=1e-2),
                 lr=1e-3)
         )
+        self._test_basic_cases(
+            lambda weight, bias: optim.Adam([weight, bias], lr=1e-3,
+                                            amsgrad=True)
+        )
+        self._test_basic_cases(
+            lambda weight, bias: optim.Adam(
+                self._build_params_dict(weight, bias, lr=1e-2),
+                lr=1e-3, amsgrad=True)
+        )
+        with self.assertRaisesRegex(ValueError, "Invalid beta parameter at index 0: 1.0"):
+            optim.Adam(None, lr=1e-2, betas=(1.0, 0.0))
 
     def test_sparse_adam(self):
         self._test_rosenbrock_sparse(
             lambda params: optim.SparseAdam(params, lr=4e-2),
             True
         )
+        with self.assertRaisesRegex(ValueError, "Invalid beta parameter at index 0: 1.0"):
+            optim.SparseAdam(None, lr=1e-2, betas=(1.0, 0.0))
 
     def test_adadelta(self):
         self._test_rosenbrock(
@@ -304,6 +329,8 @@ class TestOptim(TestCase):
             lambda weight, bias: optim.Adadelta(
                 self._build_params_dict(weight, bias, rho=0.95))
         )
+        with self.assertRaisesRegex(ValueError, "Invalid rho value: 1.1"):
+            optim.Adadelta(None, lr=1e-2, rho=1.1)
 
     def test_adagrad(self):
         self._test_rosenbrock(
@@ -322,10 +349,16 @@ class TestOptim(TestCase):
             lambda weight, bias: optim.Adagrad([weight, bias], lr=1e-1)
         )
         self._test_basic_cases(
+            lambda weight, bias: optim.Adagrad([weight, bias], lr=1e-1,
+                                               initial_accumulator_value=0.1)
+        )
+        self._test_basic_cases(
             lambda weight, bias: optim.Adagrad(
                 self._build_params_dict(weight, bias, lr=1e-2),
                 lr=1e-1)
         )
+        with self.assertRaisesRegex(ValueError, "Invalid lr_decay value: -0.5"):
+            optim.Adagrad(None, lr=1e-2, lr_decay=-0.5)
 
     def test_adagrad_sparse(self):
         self._test_rosenbrock_sparse(
@@ -346,13 +379,15 @@ class TestOptim(TestCase):
             wrap_old_fn(old_optim.adamax, learningRate=1e-1, beta1=0.95, beta2=0.998)
         )
         self._test_basic_cases(
-            lambda weight, bias: optim.Adagrad([weight, bias], lr=1e-1)
+            lambda weight, bias: optim.Adamax([weight, bias], lr=1e-1)
         )
         self._test_basic_cases(
-            lambda weight, bias: optim.Adagrad(
+            lambda weight, bias: optim.Adamax(
                 self._build_params_dict(weight, bias, lr=1e-2),
                 lr=1e-1)
         )
+        with self.assertRaisesRegex(ValueError, "Invalid beta parameter at index 1: 1.0"):
+            optim.Adamax(None, lr=1e-2, betas=(0.0, 1.0))
 
     def test_rmsprop(self):
         self._test_rosenbrock(
@@ -368,13 +403,15 @@ class TestOptim(TestCase):
             wrap_old_fn(old_optim.rmsprop, learningRate=1e-2, alpha=0.95)
         )
         self._test_basic_cases(
-            lambda weight, bias: optim.Adagrad([weight, bias], lr=1e-2)
+            lambda weight, bias: optim.RMSprop([weight, bias], lr=1e-2)
         )
         self._test_basic_cases(
-            lambda weight, bias: optim.Adagrad(
+            lambda weight, bias: optim.RMSprop(
                 self._build_params_dict(weight, bias, lr=1e-3),
                 lr=1e-2)
         )
+        with self.assertRaisesRegex(ValueError, "Invalid momentum value: -1.0"):
+            optim.RMSprop(None, lr=1e-2, momentum=-1.0)
 
     def test_asgd(self):
         self._test_rosenbrock(
@@ -397,6 +434,8 @@ class TestOptim(TestCase):
                 self._build_params_dict(weight, bias, lr=1e-2),
                 lr=1e-3, t0=100)
         )
+        with self.assertRaisesRegex(ValueError, "Invalid weight_decay value: -0.5"):
+            optim.ASGD(None, lr=1e-2, weight_decay=-0.5)
 
     def test_rprop(self):
         self._test_rosenbrock(
@@ -419,6 +458,8 @@ class TestOptim(TestCase):
                 self._build_params_dict(weight, bias, lr=1e-2),
                 lr=1e-3)
         )
+        with self.assertRaisesRegex(ValueError, "Invalid eta values: 1.0, 0.5"):
+            optim.Rprop(None, lr=1e-2, etas=(1.0, 0.5))
 
     def test_lbfgs(self):
         self._test_rosenbrock(
@@ -460,10 +501,10 @@ class TestLRScheduler(TestCase):
         # lr = 0.05     if epoch < 3
         # lr = 0.005    if 30 <= epoch < 6
         # lr = 0.0005   if epoch >= 9
-        single_targets = [0.05] * 3 + [0.005] * 3 + [0.0005] * 3 + [0.00005] * 3
-        targets = [single_targets, list(map(lambda x: x * 10, single_targets))]
-        scheduler = StepLR(self.opt, gamma=0.1, step_size=3)
         epochs = 10
+        single_targets = [0.05] * 3 + [0.005] * 3 + [0.0005] * 3 + [0.00005] * 3
+        targets = [single_targets, list(map(lambda x: x * epochs, single_targets))]
+        scheduler = StepLR(self.opt, gamma=0.1, step_size=3)
         self._test(scheduler, targets, epochs)
 
     def test_multi_step_lr(self):
@@ -471,106 +512,116 @@ class TestLRScheduler(TestCase):
         # lr = 0.005    if 2 <= epoch < 5
         # lr = 0.0005   if epoch < 9
         # lr = 0.00005   if epoch >= 9
-        single_targets = [0.05] * 2 + [0.005] * 3 + [0.0005] * 4 + [0.00005] * 3
-        targets = [single_targets, list(map(lambda x: x * 10, single_targets))]
-        scheduler = MultiStepLR(self.opt, gamma=0.1, milestones=[2, 5, 9])
         epochs = 10
+        single_targets = [0.05] * 2 + [0.005] * 3 + [0.0005] * 4 + [0.00005] * 3
+        targets = [single_targets, list(map(lambda x: x * epochs, single_targets))]
+        scheduler = MultiStepLR(self.opt, gamma=0.1, milestones=[2, 5, 9])
         self._test(scheduler, targets, epochs)
 
     def test_exp_lr(self):
-        single_targets = [0.05 * (0.9 ** x) for x in range(10)]
-        targets = [single_targets, list(map(lambda x: x * 10, single_targets))]
-        scheduler = ExponentialLR(self.opt, gamma=0.9)
         epochs = 10
+        single_targets = [0.05 * (0.9 ** x) for x in range(epochs)]
+        targets = [single_targets, list(map(lambda x: x * epochs, single_targets))]
+        scheduler = ExponentialLR(self.opt, gamma=0.9)
+        self._test(scheduler, targets, epochs)
+
+    def test_cos_anneal_lr(self):
+        epochs = 10
+        eta_min = 1e-10
+        single_targets = [eta_min + (0.05 - eta_min) *
+                          (1 + math.cos(math.pi * x / epochs)) / 2
+                          for x in range(epochs)]
+        targets = [single_targets, list(map(lambda x: x * epochs, single_targets))]
+        scheduler = CosineAnnealingLR(self.opt, T_max=epochs, eta_min=eta_min)
         self._test(scheduler, targets, epochs)
 
     def test_reduce_lr_on_plateau1(self):
+        epochs = 10
         for param_group in self.opt.param_groups:
             param_group['lr'] = 0.5
         targets = [[0.5] * 20]
         metrics = [10 - i * 0.0167 for i in range(20)]
         scheduler = ReduceLROnPlateau(self.opt, threshold_mode='abs', mode='min',
                                       threshold=0.01, patience=5, cooldown=5)
-        epochs = 10
         self._test_reduce_lr_on_plateau(scheduler, targets, metrics, epochs)
 
     def test_reduce_lr_on_plateau2(self):
+        epochs = 22
         for param_group in self.opt.param_groups:
             param_group['lr'] = 0.5
         targets = [[0.5] * 6 + [0.05] * 7 + [0.005] * 7 + [0.0005] * 2]
         metrics = [10 - i * 0.0165 for i in range(22)]
         scheduler = ReduceLROnPlateau(self.opt, patience=5, cooldown=0, threshold_mode='abs',
                                       mode='min', threshold=0.1)
-        epochs = 22
         self._test_reduce_lr_on_plateau(scheduler, targets, metrics, epochs)
 
     def test_reduce_lr_on_plateau3(self):
+        epochs = 22
         for param_group in self.opt.param_groups:
             param_group['lr'] = 0.5
         targets = [[0.5] * (2 + 6) + [0.05] * (5 + 6) + [0.005] * 4]
         metrics = [-0.8] * 2 + [-0.234] * 20
         scheduler = ReduceLROnPlateau(self.opt, mode='max', patience=5, cooldown=5,
                                       threshold_mode='abs')
-        epochs = 22
         self._test_reduce_lr_on_plateau(scheduler, targets, metrics, epochs)
 
     def test_reduce_lr_on_plateau4(self):
+        epochs = 20
         for param_group in self.opt.param_groups:
             param_group['lr'] = 0.5
         targets = [[0.5] * 20]
         metrics = [1.5 * (1.025 ** i) for i in range(20)]  # 1.025 > 1.1**0.25
         scheduler = ReduceLROnPlateau(self.opt, mode='max', patience=3,
                                       threshold_mode='rel', threshold=0.1)
-        epochs = 20
         self._test_reduce_lr_on_plateau(scheduler, targets, metrics, epochs)
 
     def test_reduce_lr_on_plateau5(self):
+        epochs = 20
         for param_group in self.opt.param_groups:
             param_group['lr'] = 0.5
         targets = [[0.5] * 6 + [0.05] * (5 + 6) + [0.005] * 4]
         metrics = [1.5 * (1.005 ** i) for i in range(20)]
         scheduler = ReduceLROnPlateau(self.opt, mode='max', threshold_mode='rel',
                                       threshold=0.1, patience=5, cooldown=5)
-        epochs = 20
         self._test_reduce_lr_on_plateau(scheduler, targets, metrics, epochs)
 
     def test_reduce_lr_on_plateau6(self):
+        epochs = 20
         for param_group in self.opt.param_groups:
             param_group['lr'] = 0.5
         targets = [[0.5] * 20]
         metrics = [1.5 * (0.85 ** i) for i in range(20)]
         scheduler = ReduceLROnPlateau(self.opt, mode='min', threshold_mode='rel',
                                       threshold=0.1)
-        epochs = 20
         self._test_reduce_lr_on_plateau(scheduler, targets, metrics, epochs)
 
     def test_reduce_lr_on_plateau7(self):
+        epochs = 20
         for param_group in self.opt.param_groups:
             param_group['lr'] = 0.5
         targets = [[0.5] * 6 + [0.05] * (5 + 6) + [0.005] * 4]
         metrics = [1] * 7 + [0.6] + [0.5] * 12
         scheduler = ReduceLROnPlateau(self.opt, mode='min', threshold_mode='rel',
                                       threshold=0.1, patience=5, cooldown=5)
-        epochs = 20
         self._test_reduce_lr_on_plateau(scheduler, targets, metrics, epochs)
 
     def test_reduce_lr_on_plateau8(self):
+        epochs = 20
         for param_group in self.opt.param_groups:
             param_group['lr'] = 0.5
         targets = [[0.5] * 6 + [0.4] * 14, [0.5] * 6 + [0.3] * 14]
         metrics = [1.5 * (1.005 ** i) for i in range(20)]
         scheduler = ReduceLROnPlateau(self.opt, mode='max', threshold_mode='rel', min_lr=[0.4, 0.3],
                                       threshold=0.1, patience=5, cooldown=5)
-        epochs = 20
         self._test_reduce_lr_on_plateau(scheduler, targets, metrics, epochs)
 
     def test_lambda_lr(self):
+        epochs = 10
         self.opt.param_groups[0]['lr'] = 0.05
         self.opt.param_groups[1]['lr'] = 0.4
-        targets = [[0.05 * (0.9 ** x) for x in range(10)], [0.4 * (0.8 ** x) for x in range(10)]]
+        targets = [[0.05 * (0.9 ** x) for x in range(epochs)], [0.4 * (0.8 ** x) for x in range(epochs)]]
         scheduler = LambdaLR(self.opt,
                              lr_lambda=[lambda x1: 0.9 ** x1, lambda x2: 0.8 ** x2])
-        epochs = 10
         self._test(scheduler, targets, epochs)
 
     def _test(self, scheduler, targets, epochs=10):
@@ -590,6 +641,7 @@ class TestLRScheduler(TestCase):
                 self.assertAlmostEqual(target[epoch], param_group['lr'],
                                        msg='LR is wrong in epoch {}: expected {}, got {}'.format(
                                            epoch, target[epoch], param_group['lr']), delta=1e-5)
+
 
 if __name__ == '__main__':
     run_tests()

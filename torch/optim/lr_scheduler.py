@@ -1,4 +1,7 @@
+import math
 from bisect import bisect_right
+from functools import partial
+
 from .optimizer import Optimizer
 
 
@@ -82,7 +85,7 @@ class StepLR(_LRScheduler):
         last_epoch (int): The index of last epoch. Default: -1.
 
     Example:
-        >>> # Assuming optimizer uses lr = 0.5 for all groups
+        >>> # Assuming optimizer uses lr = 0.05 for all groups
         >>> # lr = 0.05     if epoch < 30
         >>> # lr = 0.005    if 30 <= epoch < 60
         >>> # lr = 0.0005   if 60 <= epoch < 90
@@ -117,7 +120,7 @@ class MultiStepLR(_LRScheduler):
         last_epoch (int): The index of last epoch. Default: -1.
 
     Example:
-        >>> # Assuming optimizer uses lr = 0.5 for all groups
+        >>> # Assuming optimizer uses lr = 0.05 for all groups
         >>> # lr = 0.05     if epoch < 30
         >>> # lr = 0.005    if 30 <= epoch < 80
         >>> # lr = 0.0005   if epoch >= 80
@@ -157,6 +160,43 @@ class ExponentialLR(_LRScheduler):
 
     def get_lr(self):
         return [base_lr * self.gamma ** self.last_epoch
+                for base_lr in self.base_lrs]
+
+
+class CosineAnnealingLR(_LRScheduler):
+    r"""Set the learning rate of each parameter group using a cosine annealing
+    schedule, where :math:`\eta_{max}` is set to the initial lr and
+    :math:`T_{cur}` is the number of epochs since the last restart in SGDR:
+
+    .. math::
+
+        \eta_t = \eta_{min} + \frac{1}{2}(\eta_{max} - \eta_{min})(1 +
+        \cos(\frac{T_{cur}}{T_{max}}\pi))
+
+    When last_epoch=-1, sets initial lr as lr.
+
+    It has been proposed in
+    `SGDR: Stochastic Gradient Descent with Warm Restarts`_. Note that this only
+    implements the cosine annealing part of SGDR, and not the restarts.
+
+    Args:
+        optimizer (Optimizer): Wrapped optimizer.
+        T_max (int): Maximum number of iterations.
+        eta_min (float): Minimum learning rate. Default: 0.
+        last_epoch (int): The index of last epoch. Default: -1.
+
+    .. _SGDR\: Stochastic Gradient Descent with Warm Restarts:
+        https://arxiv.org/abs/1608.03983
+    """
+
+    def __init__(self, optimizer, T_max, eta_min=0, last_epoch=-1):
+        self.T_max = T_max
+        self.eta_min = eta_min
+        super(CosineAnnealingLR, self).__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        return [self.eta_min + (base_lr - self.eta_min) *
+                (1 + math.cos(math.pi * self.last_epoch / self.T_max)) / 2
                 for base_lr in self.base_lrs]
 
 
@@ -284,22 +324,30 @@ class ReduceLROnPlateau(object):
     def in_cooldown(self):
         return self.cooldown_counter > 0
 
+    def _cmp(self, mode, threshold_mode, threshold, a, best):
+        if mode == 'min' and threshold_mode == 'rel':
+            rel_epsilon = 1. - threshold
+            return a < best * rel_epsilon
+
+        elif mode == 'min' and threshold_mode == 'abs':
+            return a < best - threshold
+
+        elif mode == 'max' and threshold_mode == 'rel':
+            rel_epsilon = threshold + 1.
+            return a > best * rel_epsilon
+
+        else:  # mode == 'max' and epsilon_mode == 'abs':
+            return a > best + threshold
+
     def _init_is_better(self, mode, threshold, threshold_mode):
         if mode not in {'min', 'max'}:
             raise ValueError('mode ' + mode + ' is unknown!')
         if threshold_mode not in {'rel', 'abs'}:
-            raise ValueError('threshold mode ' + mode + ' is unknown!')
-        if mode == 'min' and threshold_mode == 'rel':
-            rel_epsilon = 1. - threshold
-            self.is_better = lambda a, best: a < best * rel_epsilon
-            self.mode_worse = float('Inf')
-        elif mode == 'min' and threshold_mode == 'abs':
-            self.is_better = lambda a, best: a < best - threshold
-            self.mode_worse = float('Inf')
-        elif mode == 'max' and threshold_mode == 'rel':
-            rel_epsilon = threshold + 1.
-            self.is_better = lambda a, best: a > best * rel_epsilon
-            self.mode_worse = -float('Inf')
-        else:  # mode == 'max' and epsilon_mode == 'abs':
-            self.is_better = lambda a, best: a > best + threshold
-            self.mode_worse = -float('Inf')
+            raise ValueError('threshold mode ' + threshold_mode + ' is unknown!')
+
+        if mode == 'min':
+            self.mode_worse = float('inf')
+        else:  # mode == 'max':
+            self.mode_worse = (-float('inf'))
+
+        self.is_better = partial(self._cmp, mode, threshold_mode, threshold)

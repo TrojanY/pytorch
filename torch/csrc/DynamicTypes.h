@@ -6,24 +6,27 @@
 #include <memory>
 #include <unordered_map>
 #include <ATen/ATen.h>
+#include "torch/csrc/Dtype.h"
+#include "torch/csrc/Layout.h"
+#include "torch/csrc/utils/device.h"
 
 namespace torch {
-
-// Register a PyTypeObject* with the given attributes
-void registerPyTypeObject(
-    PyTypeObject *pytype, const std::string& name,
-    bool is_cuda, bool is_sparse);
 
 // Register a PyTypeObject* with the given attributes
 void registerStoragePyTypeObject(
     PyTypeObject *pytype, const std::string& name,
     bool is_cuda, bool is_sparse);
 
-PyObject* createPyObject(const at::Tensor& tensor);
+void registerDtypeObject(THPDtype *dtype, at::ScalarType scalarType);
+void registerLayoutObject(THPLayout *layout, at::Backend backend);
+
 PyObject* createPyObject(const at::Storage& storage);
-PyTypeObject* getPyTypeObject(const at::Tensor& tensor);
-//rename to createPyObject when THPP is removed
-// Creates a at::Tensor from a PyObject.  Does NOT steal the PyObject reference.
-at::Tensor createTensor(PyObject *data);
+std::unique_ptr<at::Storage> createStorage(PyObject* obj);
+bool isStorage(PyObject* obj);
+
+THPDtype* getDtype(at::ScalarType scalarType);
+THPLayout* getLayout(at::Backend backend);
+at::Type& getType(at::ScalarType scalarType, const THPLayout& layout, const DeviceType& deviceType);
+DeviceType getDeviceType(const at::Type& type);
 
 }  // namespace torch

@@ -1,6 +1,7 @@
 #ifndef THC_TENSORMATH_POINTWISE_CUH
 #define THC_TENSORMATH_POINTWISE_CUH
 
+#include <type_traits>
 #include "THCTensorMath.h"
 #include "THCGeneral.h"
 #include "THCHalf.h"
@@ -8,6 +9,14 @@
 #include "THCApply.cuh"
 #include "THCNumerics.cuh"
 #include "THCReduce.cuh"
+
+
+template <typename T>
+struct TensorATan2Op {
+  __device__ __forceinline__ void operator()(T* out, T* a, T* b) {
+    *out = THCNumerics<T>::atan2(*a, *b);
+  }
+};
 
 template <typename T>
 struct TensorSigmoidOp {
@@ -273,13 +282,8 @@ struct TensorPowOp {
     } else if (StaticExp == 2) {
       *out = THCNumerics<T>::mul(*in, *in);
     } else if (StaticExp == 3) {
-      *out = THCNumerics<T>::mul(*in, *in);
-      *out = THCNumerics<T>::mul(*out, *in);
-    } else if (StaticExp == -1) {
-      *out = THCNumerics<T>::cinv(*in);
-    } else if (StaticExp == -2) {
-      *out = THCNumerics<T>::mul(*in, *in);
-      *out = THCNumerics<T>::cinv(*out);
+      T square = THCNumerics<T>::mul(*in, *in);
+      *out = THCNumerics<T>::mul(square, *in);
     } else {
       *out = THCNumerics<T>::pow(*in, val);
     }
@@ -292,14 +296,39 @@ struct TensorPowOp {
       *v = THCNumerics<T>::mul(*v, *v);
     } else if (StaticExp == 3) {
       *v = THCNumerics<T>::mul(THCNumerics<T>::mul(*v, *v), *v);
-    } else if (StaticExp == -1) {
-      *v = THCNumerics<T>::cinv(*v);
-    } else if (StaticExp == -2) {
-      *v = THCNumerics<T>::mul(*v, *v);
-      *v = THCNumerics<T>::cinv(*v);
     } else {
       *v = THCNumerics<T>::pow(*v, val);
     }
+  }
+
+  const T val;
+};
+
+template<typename T>
+struct TensorPowOp<T, -1> {
+  TensorPowOp(T v) : val(v) {}
+  __device__ __forceinline__ void operator()(T* out, T* in) {
+    *out = THCNumerics<T>::cinv(*in);
+  }
+
+  __device__ __forceinline__ void operator()(T* v) {
+    *v = THCNumerics<T>::cinv(*v);
+  }
+
+  const T val;
+};
+
+template<typename T>
+struct TensorPowOp<T, -2> {
+  TensorPowOp(T v) : val(v) {}
+  __device__ __forceinline__ void operator()(T* out, T* in) {
+    T square = THCNumerics<T>::mul(*in, *in);
+    *out = THCNumerics<T>::cinv(square);
+  }
+
+  __device__ __forceinline__ void operator()(T* v) {
+    T square = THCNumerics<T>::mul(*v, *v);
+    *v = THCNumerics<T>::cinv(square);
   }
 
   const T val;
@@ -323,13 +352,25 @@ struct TensorTPowOp {
 template <typename T>
 struct TensorCPowOp {
   __device__ __forceinline__ void operator()(T* out, T* in) {
-    *out = powf((float) *out, (float) *in);
+    *out = THCNumerics<T>::pow(*out, *in);
   }
 
   __device__ __forceinline__ void operator()(T* out, T* in1, T* in2) {
-    *out = powf((float) *in1, (float) *in2);
+    *out = THCNumerics<T>::pow(*in1, *in2);
   }
 };
+
+template <>
+struct TensorCPowOp<float> {
+  __device__ __forceinline__ void operator()(float* out, float* in) {
+    *out = powf(*out, *in);
+  }
+
+  __device__ __forceinline__ void operator()(float* out, float* in1, float* in2) {
+    *out = powf(*in1, *in2);
+  }
+};
+
 
 template <>
 struct TensorCPowOp<double> {
@@ -402,17 +443,19 @@ struct TensorDivOp<half> {
 template <typename T>
 struct TensorCRemainderOp {
   __device__ __forceinline__ void operator()(T* out, T* in) {
-    *out =  *out % *in;
-    if ((*out * *in)<0){
-      *out += *in;
+    T val =  *out % *in;
+    if ((val * *in)<0){
+      val += *in;
     }
+    *out = val;
   }
 
   __device__ __forceinline__ void operator()(T* out, T* in1, T* in2) {
-    *out = *in1 % *in2;
-    if ((*out * *in2)<0){
-      *out += *in2;
+    T val = *in1 % *in2;
+    if ((val * *in2)<0){
+      val += *in2;
     }
+    *out = val;
   }
 };
 
@@ -548,20 +591,24 @@ struct TensorCrossOp {
   TensorCrossOp(int64_t sx, int64_t sy, int64_t so) : sx(sx), sy(sy), so(so) {}
 
   __device__ __forceinline__ void operator()(T* out, T* x, T*y) {
-    out[0 * so] = THCNumerics<T>::sub(
+    T val0 = THCNumerics<T>::sub(
         THCNumerics<T>::mul(x[1 * sx], y[2 * sy]),
         THCNumerics<T>::mul(x[2 * sx], y[1 * sy])
     );
 
-    out[1 * so] = THCNumerics<T>::sub(
+    T val1 = THCNumerics<T>::sub(
         THCNumerics<T>::mul(x[2 * sx], y[0 * sy]),
         THCNumerics<T>::mul(x[0 * sx], y[2 * sy])
     );
 
-    out[2 * so] = THCNumerics<T>::sub(
+    T val2 = THCNumerics<T>::sub(
         THCNumerics<T>::mul(x[0 * sx], y[1 * sy]),
         THCNumerics<T>::mul(x[1 * sx], y[0 * sy])
     );
+
+    out[0 * so] = val0;
+    out[1 * so] = val1;
+    out[2 * so] = val2;
   }
 
   const int64_t sx, sy, so;
@@ -771,5 +818,98 @@ struct TensorBitXorOp {
   }
 };
 
+/*
+ * The following function was converted to CUDA form from code that comes
+ * with the following copyright notice. It has been released under the BSD license.
+ *
+ * Cephes Math Library Release 2.8:  June, 2000
+ * Copyright 1984, 1987, 1992, 2000 by Stephen L. Moshier
+ */
+template <typename real, typename accreal>
+struct TensorDigammaOp {
+  __device__ __forceinline__ void
+  operator()(real* out, real* in) {
+    using compute_type = typename std::conditional<std::is_same<real, half>::value, accreal, real>::type;
+    static const double PI_f64 = 3.14159265358979323846;
+    static const compute_type PSI_10 = 2.25175258906672110764;
+    static const compute_type A[] = {
+       8.33333333333333333333E-2,
+      -2.10927960927960927961E-2,
+       7.57575757575757575758E-3,
+      -4.16666666666666666667E-3,
+       3.96825396825396825397E-3,
+      -8.33333333333333333333E-3,
+       8.33333333333333333333E-2,
+    };
+
+    auto x = scalar_cast<compute_type>(*in);
+    if (x == 0) {
+      *out = scalar_cast<real>(INFINITY);
+      return;
+    }
+
+    bool x_is_integer = x == floor(x);
+    compute_type result = 0;
+    if (x < 0) {
+      if (x_is_integer) {
+        *out = scalar_cast<real>(INFINITY);
+        return;
+      }
+      // Rounding errors in tan's input can really affect the output
+      // for extreme values, so we always perform this computation in double.
+      result = scalar_cast<compute_type>(
+          - PI_f64 / tan(PI_f64 * scalar_cast<double>(x)));
+      x = 1 - x;
+    }
+
+    while (x < 10) {
+      result -= 1 / x;
+      x += 1;
+    }
+    if (x == 10) {
+      *out = scalar_cast<real>(result + PSI_10);
+      return;
+    }
+
+    compute_type y = 0;
+    if (x < 1.0e17) {
+      compute_type z = 1.0 / (x * x);
+
+      compute_type polevl_result = 0;
+      for (int i = 0; i <= 6; i++) {
+        polevl_result = polevl_result * z + A[i];
+      }
+      y = z * polevl_result;
+    }
+
+    *out = scalar_cast<real>(log(x) - (0.5 / x) - y + result);
+    return;
+  }
+};
+
+template <typename real, typename accreal>
+struct TensorTrigammaOp {
+  using compute_type = typename std::conditional<std::is_same<real, half>::value, accreal, real>::type;
+  __device__ __forceinline__ void
+  operator()(real* out, real* in) {
+    const compute_type PI = 3.14159265358979323846;
+    compute_type x = ScalarConvert<real, compute_type>::to(*in);
+    compute_type sign = +1;
+    compute_type result = 0;
+    if (x < 0.5f) {
+      sign = -1;
+      compute_type sin_pi_x = THCNumerics<compute_type>::sin(PI * x);
+      result -= (PI * PI) / (sin_pi_x * sin_pi_x);
+      x = 1 - x;
+    }
+    for (int i = 0; i < 6; ++i) {
+      result += 1 / (x * x);
+      x += 1;
+    }
+    const compute_type ixx = 1 / (x*x);
+    result += (1 + 1 / (2*x) + ixx * (1.f/6 - ixx * (1.f/30 - ixx * (1.f/42)))) / x;
+    *out = ScalarConvert<compute_type, real>::to(sign * result);
+  }
+};
 
 #endif // THC_TENSORMATH_POINTWISE_CUH

@@ -1,51 +1,57 @@
 #include "torch/csrc/autograd/saved_variable.h"
 
+#include "torch/csrc/autograd/edge.h"
 #include "torch/csrc/autograd/function.h"
+#include "torch/csrc/autograd/variable.h"
+#include "torch/csrc/jit/tracer_state.h"
 
-using namespace at;
+#include <ATen/Tensor.h>
+
+#include <cstdint>
+#include <list>
+#include <memory>
 
 namespace torch { namespace autograd {
 
-SavedVariable::SavedVariable(const Variable& variable, bool is_output)
-  : SavedVariable() {
-  if (!variable.defined()) {
-    return;
-  }
-  data = variable.data();
-  requires_grad = variable.requires_grad();
-  is_volatile = variable.is_volatile();
-  expected_version = variable.current_version();
-  version = variable.get()->version_counter.save();
-  has_grad_fn = !variable.is_leaf();
-  output_nr = variable.output_nr();
-  if (!has_grad_fn) {
-    grad_accumulator = variable.grad_accumulator();
-  }
-  if (!is_output) {
-    _grad_fn = variable.grad_fn();
-  }
-  if (variable.tracing_state()) {
-    tracing_state.reset(new jit::tracer::ValueTracingState(*variable.tracing_state()));
+SavedVariable::SavedVariable(const Variable& variable, bool is_output) {
+  if (variable.defined()) {
+    was_default_constructed_ = false;
+    output_nr_ = variable.output_nr();
+    requires_grad_ = variable.requires_grad();
+    has_grad_fn_ = !variable.is_leaf();
+    // These copies are all shared_ptr copies, so slightly more expensive.
+    // Do them here instead of in the init list in case data is undefined.
+    data_ = variable.data();
+    if (variable.is_leaf()) {
+      grad_accumulator_ = variable.grad_accumulator();
+    } else if (!is_output) {
+      grad_fn_ = variable.grad_fn();
+    }
+    version_counter_ = variable.version_counter();
+    saved_version_ = version_counter_.current_version();
+    if (variable.has_tracing_state()) {
+      tracing_state_.reset(
+          new jit::tracer::ValueTracingState(variable.tracing_state()));
+    }
   }
 }
 
-auto SavedVariable::unpack(std::shared_ptr<Function> saved_for) const -> Variable {
-  if (!data.defined()) {
-    if (version.defined()) {
+Variable SavedVariable::unpack(std::shared_ptr<Function> saved_for) const {
+  if (!data_.defined()) {
+    if (!was_default_constructed_) {
       throw std::runtime_error(ERR_BACKWARD_TWICE);
     }
     return Variable();
   }
 
-  if (version.is_modified()) {
+  if (saved_version_ != version_counter_.current_version()) {
     throw std::runtime_error(
         "one of the variables needed for gradient computation has been "
         "modified by an inplace operation");
   }
 
-  auto flags = VarFlags(requires_grad, is_volatile);
-  auto grad_fn = _grad_fn;
-  if (has_grad_fn && !grad_fn) {
+  auto grad_fn = grad_fn_;
+  if (has_grad_fn_ && !grad_fn) {
     if (!saved_for) {
       // If saving the grad_fn would create a circular reference, then it must
       // be passed in to the unpack function.
@@ -57,29 +63,27 @@ auto SavedVariable::unpack(std::shared_ptr<Function> saved_for) const -> Variabl
   // NB: saved views are unpacked as normal Variables (not views) even though
   // they still share the same storage. This works only because we never call
   // in-place functions on unpacked variables.
-  auto var = make_variable(data, flags, output_nr, std::move(grad_fn));
-  var.version_counter() = version;
+  Variable var;
+  if (grad_fn) {
+    var = make_variable(data_, Edge(std::move(grad_fn), output_nr_));
+  } else {
+    var = make_variable(data_, requires_grad_);
+  }
+  var.set_version_counter(saved_version_);
 
   // If a Variable is a leaf (no grad_fn saved), and it requires_grad, then we
   // should have saved the grad accumulator. Even if the Variable no longer
-  // alive, the accumulator should be kept alive by the references in the graph).
-  if (requires_grad && !var.grad_fn() && grad_accumulator.expired())
+  // alive, the accumulator should be kept alive by the references in the
+  // graph).
+  if (requires_grad_ && !var.grad_fn() && grad_accumulator_.expired())
     throw std::logic_error("No grad accumulator for a saved leaf!");
-  var.get()->grad_accumulator = grad_accumulator;
-  if (tracing_state)
-    var.tracing_state().reset(new jit::tracer::ValueTracingState(*tracing_state));
+  var.set_grad_accumulator(grad_accumulator_);
+  if (tracing_state_) {
+    var.set_tracing_state(new jit::tracer::ValueTracingState(*tracing_state_));
+  }
 
   return var;
 }
-
-auto SavedVariable::unpack_data(std::shared_ptr<Function> saved_for) const -> Tensor {
-  auto var = unpack(saved_for);
-  if (var.defined()) {
-    return var.data();
-  }
-  return Tensor();
-}
-
 
 const char* ERR_BACKWARD_TWICE =
     "Trying to backward through the graph a second time, but the buffers have "

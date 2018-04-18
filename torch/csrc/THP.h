@@ -6,17 +6,6 @@
 #include <TH/TH.h>
 #include <THS/THS.h>
 
-// macros for Windows compatibility
-#ifdef _WIN32
-#undef PyLong_FromLong
-#undef PyLong_AsLong
-#undef PyLong_FromUnsignedLong
-
-#define PyLong_FromLong         PyLong_FromLongLong
-#define PyLong_AsLong           PyLong_AsLongLong
-#define PyLong_FromUnsignedLong PyLong_FromUnsignedLongLong
-#endif
-
 #include "THP_export.h"
 
 // Back-compatibility macros, Thanks to http://cx-oracle.sourceforge.net/
@@ -39,7 +28,6 @@
 #include "Exceptions.h"
 #include "Generator.h"
 #include "Storage.h"
-#include "Tensor.h"
 #include "Size.h"
 #include "Module.h"
 #include "Types.h"
@@ -48,7 +36,6 @@
 
 #ifdef _THP_CORE
 #include "serialization.h"
-#include "allocators.h"
 
 #include "autograd/autograd.h"
 #endif

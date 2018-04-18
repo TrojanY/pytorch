@@ -7,22 +7,30 @@ Tensors
 .. autofunction:: is_tensor
 .. autofunction:: is_storage
 .. autofunction:: set_default_tensor_type
+.. autofunction:: set_default_dtype
 .. autofunction:: numel
 .. autofunction:: set_printoptions
+.. autofunction:: set_flush_denormal
 
+.. _tensor-creation-ops:
 
 Creation Ops
 ~~~~~~~~~~~~~~~~~~~~~~
-.. autofunction:: eye
+.. autofunction:: tensor
 .. autofunction:: from_numpy
-.. autofunction:: linspace
-.. autofunction:: logspace
+.. autofunction:: zeros
+.. autofunction:: zeros_like
 .. autofunction:: ones
 .. autofunction:: ones_like
 .. autofunction:: arange
 .. autofunction:: range
-.. autofunction:: zeros
-.. autofunction:: zeros_like
+.. autofunction:: linspace
+.. autofunction:: logspace
+.. autofunction:: eye
+.. autofunction:: empty
+.. autofunction:: empty_like
+.. autofunction:: full
+.. autofunction:: full_like
 
 Indexing, Slicing, Joining, Mutating Ops
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -32,6 +40,7 @@ Indexing, Slicing, Joining, Mutating Ops
 .. autofunction:: index_select
 .. autofunction:: masked_select
 .. autofunction:: nonzero
+.. autofunction:: reshape
 .. autofunction:: split
 .. autofunction:: squeeze
 .. autofunction:: stack
@@ -40,6 +49,7 @@ Indexing, Slicing, Joining, Mutating Ops
 .. autofunction:: transpose
 .. autofunction:: unbind
 .. autofunction:: unsqueeze
+.. autofunction:: where
 
 
 Random sampling
@@ -53,7 +63,9 @@ Random sampling
 .. autofunction:: multinomial
 .. autofunction:: normal
 .. autofunction:: rand
+.. autofunction:: randint
 .. autofunction:: randn
+.. autofunction:: randn_like
 .. autofunction:: randperm
 
 In-place random sampling
@@ -68,7 +80,7 @@ There are a few more in-place random sampling functions defined on Tensors as we
 - :func:`torch.Tensor.log_normal_` - samples from the log-normal distribution
 - :func:`torch.Tensor.normal_` - in-place version of :func:`torch.normal`
 - :func:`torch.Tensor.random_` - numbers sampled from the discrete uniform distribution
-- :func:`torch.Tensor.uniform_` - numbers sampled from the uniform distribution
+- :func:`torch.Tensor.uniform_` - numbers sampled from the continuous uniform distribution
 
 
 Serialization
@@ -105,12 +117,15 @@ Pointwise Ops
 .. autofunction:: erf
 .. autofunction:: erfinv
 .. autofunction:: exp
+.. autofunction:: expm1
 .. autofunction:: floor
 .. autofunction:: fmod
 .. autofunction:: frac
 .. autofunction:: lerp
 .. autofunction:: log
+.. autofunction:: log10
 .. autofunction:: log1p
+.. autofunction:: log2
 .. autofunction:: mul
 .. autofunction:: neg
 .. autofunction:: pow
@@ -130,6 +145,8 @@ Pointwise Ops
 
 Reduction Ops
 ~~~~~~~~~~~~~~~~~~~~~~
+.. autofunction:: argmax
+.. autofunction:: argmin
 .. autofunction:: cumprod
 .. autofunction:: cumsum
 .. autofunction:: dist
@@ -140,6 +157,7 @@ Reduction Ops
 .. autofunction:: prod
 .. autofunction:: std
 .. autofunction:: sum
+.. autofunction:: unique
 .. autofunction:: var
 
 
@@ -149,6 +167,7 @@ Comparison Ops
 .. autofunction:: equal
 .. autofunction:: ge
 .. autofunction:: gt
+.. autofunction:: isnan
 .. autofunction:: kthvalue
 .. autofunction:: le
 .. autofunction:: lt
@@ -159,10 +178,24 @@ Comparison Ops
 .. autofunction:: topk
 
 
+Spectral Ops
+~~~~~~~~~~~~~~~~~~~~~~
+.. autofunction:: fft
+.. autofunction:: ifft
+.. autofunction:: rfft
+.. autofunction:: irfft
+.. autofunction:: stft
+.. autofunction:: hann_window
+.. autofunction:: hamming_window
+.. autofunction:: bartlett_window
+
+
 Other Operations
 ~~~~~~~~~~~~~~~~~~~~~~
 .. autofunction:: cross
 .. autofunction:: diag
+.. autofunction:: diagflat
+.. autofunction:: diagonal
 .. autofunction:: histc
 .. autofunction:: renorm
 .. autofunction:: trace
@@ -180,7 +213,9 @@ BLAS and LAPACK Operations
 .. autofunction:: baddbmm
 .. autofunction:: bmm
 .. autofunction:: btrifact
+.. autofunction:: btrifact_with_info
 .. autofunction:: btrisolve
+.. autofunction:: btriunpack
 .. autofunction:: dot
 .. autofunction:: eig
 .. autofunction:: gels
@@ -189,6 +224,8 @@ BLAS and LAPACK Operations
 .. autofunction:: gesv
 .. autofunction:: inverse
 .. autofunction:: det
+.. autofunction:: logdet
+.. autofunction:: slogdet
 .. autofunction:: matmul
 .. autofunction:: mm
 .. autofunction:: mv

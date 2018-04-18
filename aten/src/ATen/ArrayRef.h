@@ -14,8 +14,12 @@
 // removed a bunch of slice variants for simplicity...
 
 #pragma once
-#include <assert.h>
+
+#include <ATen/Error.h>
+#include <ATen/SmallVector.h>
+
 #include <array>
+#include <iterator>
 #include <vector>
 
 namespace at {
@@ -65,6 +69,14 @@ namespace at {
     ArrayRef(const T *begin, const T *end)
       : Data(begin), Length(end - begin) {}
 
+    /// Construct an ArrayRef from a SmallVector. This is templated in order to
+    /// avoid instantiating SmallVectorTemplateCommon<T> whenever we
+    /// copy-construct an ArrayRef.
+    template<typename U>
+    /*implicit*/ ArrayRef(const SmallVectorTemplateCommon<T, U> &Vec)
+      : Data(Vec.data()), Length(Vec.size()) {
+    }
+
     /// Construct an ArrayRef from a std::vector.
     template<typename A>
     /*implicit*/ ArrayRef(const std::vector<T, A> &Vec)
@@ -104,13 +116,13 @@ namespace at {
 
     /// front - Get the first element.
     const T &front() const {
-      assert(!empty());
+      AT_ASSERT(!empty(), "Empty list!");
       return Data[0];
     }
 
     /// back - Get the last element.
     const T &back() const {
-      assert(!empty());
+      AT_ASSERT(!empty(), "Empty list!");
       return Data[Length-1];
     }
 
@@ -124,7 +136,7 @@ namespace at {
     /// slice(n, m) - Chop off the first N elements of the array, and keep M
     /// elements in the array.
     ArrayRef<T> slice(size_t N, size_t M) const {
-      assert(N+M <= size() && "Invalid specifier");
+      AT_ASSERT(N+M <= size(), "Invalid specifier");
       return ArrayRef<T>(data()+N, M);
     }
 
@@ -135,13 +147,12 @@ namespace at {
     /// @name Operator Overloads
     /// @{
     const T &operator[](size_t Index) const {
-      assert(Index < Length && "Invalid index!");
       return Data[Index];
     }
 
     /// Vector compatibility
     const T &at(size_t Index) const {
-      assert(Index < Length && "Invalid index!");
+      AT_ASSERT(Index < Length, "Invalid index!");
       return Data[Index];
     }
 

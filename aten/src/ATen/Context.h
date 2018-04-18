@@ -1,13 +1,22 @@
 #pragma once
 
-#include <memory>
-#include <mutex>
 #include "ATen/ATenGeneral.h"
+#include <ATen/CPUGeneral.h>
 #include "ATen/Generator.h"
 #include "ATen/Type.h"
 #include "ATen/Utils.h"
+#include "ATen/Error.h"
 
+#include <memory>
+#include <mutex>
+#include <cstdint>
+
+// Forwarde declare these CUDA types here to avoid including CUDA headers in
+// ATen headers, which would make ATen always require CUDA to build.
 struct THCState;
+struct CUstream_st;
+typedef struct CUstream_st *cudaStream_t;
+struct cudaDeviceProp;
 
 namespace at {
 
@@ -24,7 +33,7 @@ public:
         auto & undef = type_registry[static_cast<int>(Backend::Undefined)][static_cast<int>(ScalarType::Undefined)];
         if (undef) return *undef;
       }
-      runtime_error("%s%sType is not enabled.",toString(p),toString(s));
+      AT_ERROR("%s%sType is not enabled.",toString(p),toString(s));
     }
     return *type;
   }
@@ -32,10 +41,12 @@ public:
     initCUDAIfNeeded(p);
     auto & generator = generator_registry[static_cast<int>(p)];
     if(!generator)
-      runtime_error("%s backend type not enabled.",toString(p));
+      AT_ERROR("%s backend type not enabled.",toString(p));
     return *generator;
   }
+  bool hasMKL() const;
   bool hasCUDA() const;
+  int64_t current_device() const;
   // defined in header so that getType has ability to inline
   // call_once check. getType is called fairly frequently
   THCState* lazyInitCUDA() {
@@ -44,9 +55,23 @@ public:
     });
     return thc_state;
   }
-#if AT_CUDA_ENABLED()
+
   cudaStream_t getCurrentCUDAStream() const;
-#endif
+  cudaDeviceProp* getCurrentDeviceProperties() const;
+  cudaDeviceProp* getDeviceProperties(int device) const;
+
+  bool setFlushDenormal(bool on);
+
+  // NB: This method is *purely* whether or not a user requested
+  // that CuDNN was enabled, it doesn't actually say anything about
+  // whether or not CuDNN is actually usable.  Use cudnn_is_acceptable
+  // to test this instead
+  bool userEnabledCuDNN() const;
+  void setUserEnabledCuDNN(bool e);
+  bool benchmarkCuDNN() const;
+  void setBenchmarkCuDNN(bool);
+  bool deterministicCuDNN() const;
+  void setDeterministicCuDNN(bool);
   ~Context();
   std::unique_ptr<Generator>
     generator_registry[static_cast<int>(Backend::NumOptions)];
@@ -62,16 +87,25 @@ private:
   }
   void doInitCUDA();
   std::once_flag thc_init;
+  bool enabled_cudnn = true;
+  bool deterministic_cudnn = false;
+  bool benchmark_cudnn = false;
 };
 
 AT_API Context & globalContext();
 
 static inline void init() {
   globalContext();
+  if (const char *env_p = std::getenv("OMP_NUM_THREADS")) {
+    at::set_num_threads(std::stoi(env_p));
+  }
+  if (const char *env_p = std::getenv("MKL_NUM_THREADS")) {
+    at::set_num_threads(std::stoi(env_p));
+  }
 }
 
 static inline Type& getType(Backend p, ScalarType s) {
-  return globalContext().getType(p,s);
+  return globalContext().getType(p, s);
 }
 
 static inline Type& CPU(ScalarType s) {
@@ -86,4 +120,12 @@ static inline bool hasCUDA() {
   return globalContext().hasCUDA();
 }
 
+static inline bool hasMKL() {
+  return globalContext().hasMKL();
 }
+
+static inline int64_t current_device() {
+  return globalContext().current_device();
+}
+
+} // namespace at

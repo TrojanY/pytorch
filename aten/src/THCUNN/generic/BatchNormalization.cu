@@ -38,6 +38,11 @@ void THNN_(BatchNormalization_updateOutput)(
   bool train, double momentum, double eps) {
 
   THCTensor_(resizeAs)(state, output_, input_);
+  if (train) {
+    int64_t nInput = THCTensor_(size)(state, input_, 1);
+    THCTensor_(resize1d)(state, saveMean_, nInput);
+    THCTensor_(resize1d)(state, saveStd_, nInput);
+  }
   DeviceTensor3 input = devicetensor<3>(state, input_);
   DeviceTensor3 output = devicetensor<3>(state, output_);
   DeviceTensor1 weight = devicetensor<1>(state, weight_);

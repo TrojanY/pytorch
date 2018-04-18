@@ -1,15 +1,13 @@
 #pragma once
 
-#include "ATen/Config.h"
-
 #include "ATen/Generator.h"
 #include "ATen/Scalar.h"
 #include "ATen/ScalarType.h"
-#include "ATen/TensorAccessor.h"
-#include "ATen/TensorImpl.h"
-#include "ATen/TensorBase.h"
-#include "ATen/Storage.h"
 #include "ATen/SparseTensorRef.h"
+#include "ATen/Storage.h"
+#include "ATen/TensorAccessor.h"
+#include "ATen/TensorBase.h"
+#include "ATen/TensorImpl.h"
 #include "ATen/Utils.h"
 
 namespace at {
@@ -51,12 +49,9 @@ struct Tensor : public detail::TensorBase {
       Tensor(rhs).swap(*this);
       return *this;
   }
-  
-  Tensor & operator=(Tensor const & rhs) && {
-    return assign_(rhs);
-  }
+
+  inline Tensor & operator=(Tensor const & rhs) &&;
   Tensor & operator=(Scalar v) &&;
-  Tensor & assign_(Scalar v);
   const char * toString() const {
     return pImpl->toString();
   }
@@ -75,10 +70,14 @@ struct Tensor : public detail::TensorBase {
   std::unique_ptr<Storage> storage() const {
     return pImpl->storage();
   }
-  inline Tensor toType(const Type & t) const;
-  inline Tensor & copy_(const Tensor & src);
+  inline Tensor toType(const Type & t, bool non_blocking=false) const;
+  inline Tensor & copy_(const Tensor & src, bool non_blocking=false);
   inline Tensor toType(ScalarType t) const;
   inline Tensor toBackend(Backend b) const;
+
+  /// Returns true if the `Tensor` is actually a `torch::autograd::Variable`,
+  /// or has undefined type. Defined in Type.h because of include order issues.
+  bool is_variable_or_undefined() const noexcept;
 
   template<typename T>
   T * data() const;
@@ -86,6 +85,9 @@ struct Tensor : public detail::TensorBase {
   void * unsafeGetTH(bool retain) const {
     return pImpl->unsafeGetTH(retain);
   }
+
+  // Purposely not defined here to avoid inlining
+  void print() const;
 
   //toLongData(), toFloatData() etc.
   #define TO_TYPE_DATA(T,name,_) \
@@ -114,15 +116,21 @@ struct Tensor : public detail::TensorBase {
   Tensor& operator*=(Scalar other);
   Tensor& operator/=(const Tensor & other);
   Tensor& operator/=(Scalar other);
-  Tensor operator[](int64_t idx) const;
+  Tensor operator[](Scalar index) const;
+  Tensor operator[](Tensor index) const;
+  Tensor operator[](int64_t index) const;
 
   // STOP.  Thinking of adding a method here, which only makes use
-  // of other ATen methods?  Define it in ATen/NativeFunctions.h
-  // instead.
+  // of other ATen methods?  Define it in native_functions.yaml.
 
   //example
   //Tensor * add(Tensor & b);
   ${tensor_method_declarations}
+
+  template <typename F, typename... Args> 
+  auto m(F func, Args&&... params) const -> decltype(func(*this, std::forward<Args>(params)...)) {
+    return func(*this, std::forward<Args>(params)...);
+  } 
 };
 
 } //namespace at

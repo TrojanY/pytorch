@@ -4,20 +4,22 @@
 
 #include "ATen/CUDAGenerator.h"
 #include "ATen/Context.h"
+#include "THCTensorRandom.h"
 #include <stdexcept>
 
 #define const_generator_cast(generator) \
   dynamic_cast<const CUDAGenerator&>(generator)
+
+THCGenerator* THCRandom_getGenerator(THCState* state);
 
 namespace at {
 
 CUDAGenerator::CUDAGenerator(Context * context_)
   : context(context_)
 {
-  int num_devices, current_device;
-  cudaGetDeviceCount(&num_devices);
-  cudaGetDevice(&current_device);
-  THCRandom_init(context->thc_state, num_devices, current_device);
+  // there's no reason to call THCRandom_init, because it is called
+  // during THCudaInit, which is called before this initializer
+  generator = THCRandom_getGenerator(context->thc_state);
 }
 
 CUDAGenerator::~CUDAGenerator() {
@@ -37,13 +39,17 @@ uint64_t CUDAGenerator::seed() {
   return THCRandom_initialSeed(context->thc_state);
 }
 
+uint64_t CUDAGenerator::initialSeed() {
+  return THCRandom_initialSeed(context->thc_state);
+}
+
 CUDAGenerator& CUDAGenerator::manualSeed(uint64_t seed) {
   THCRandom_manualSeed(context->thc_state, seed);
   return *this;
 }
 
 void * CUDAGenerator::unsafeGetTH() {
-  throw std::runtime_error("CUDAGenerator::unsafeGetTH() not implemented");
+  return (void *) generator;
 }
 
 } // namespace at

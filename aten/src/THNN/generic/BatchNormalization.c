@@ -14,6 +14,11 @@ void THNN_(BatchNormalization_updateOutput)(
   int64_t f;
   ptrdiff_t n = THTensor_(nElement)(input) / nInput;
 
+  if (train) {
+    THTensor_(resize1d)(save_mean, nInput);
+    THTensor_(resize1d)(save_std, nInput);
+  }
+
   #pragma omp parallel for
   for (f = 0; f < nInput; ++f) {
     THTensor *in = THTensor_(newSelect)(input, 1, f);
@@ -42,12 +47,15 @@ void THNN_(BatchNormalization_updateOutput)(
       THTensor_(set1d)(save_std, f, (real) invstd);
 
       // update running averages
-      THTensor_(set1d)(running_mean, f,
-        (real) (momentum * mean + (1 - momentum) * THTensor_(get1d)(running_mean, f)));
-
-      accreal unbiased_var = sum / (n - 1);
-      THTensor_(set1d)(running_var, f,
-        (real) (momentum * unbiased_var + (1 - momentum) * THTensor_(get1d)(running_var, f)));
+      if (running_mean) {
+        THTensor_(set1d)(running_mean, f,
+          (real) (momentum * mean + (1 - momentum) * THTensor_(get1d)(running_mean, f)));
+      }
+      if (running_var) {
+        accreal unbiased_var = sum / (n - 1);
+        THTensor_(set1d)(running_var, f,
+          (real) (momentum * unbiased_var + (1 - momentum) * THTensor_(get1d)(running_var, f)));
+      }
     } else {
       mean = THTensor_(get1d)(running_mean, f);
       invstd = 1 / sqrt(THTensor_(get1d)(running_var, f) + eps);

@@ -5,12 +5,19 @@
 #include <thread>
 #include <mutex>
 #include <sstream>
+#include <string>
+#include <stdexcept>
 
 #if AT_CUDA_ENABLED()
+#include <cuda.h>
 #include "THC/THC.h"
 #include "ATen/CUDAGenerator.h"
 #endif
 #include "ATen/CPUGenerator.h"
+
+#ifdef USE_SSE3
+#include <pmmintrin.h>
+#endif
 
 namespace at {
 
@@ -55,6 +62,41 @@ Context & globalContext() {
   return globalContext_;
 }
 
+// NB: This method is *purely* whether or not a user requested
+// that CuDNN was enabled, it doesn't actually say anything about
+// whether or not CuDNN is actually usable.
+bool Context::userEnabledCuDNN() const {
+  return enabled_cudnn;
+}
+
+void Context::setUserEnabledCuDNN(bool e) {
+  enabled_cudnn = e;
+}
+
+bool Context::deterministicCuDNN() const {
+  return deterministic_cudnn;
+}
+
+void Context::setDeterministicCuDNN(bool b) {
+  deterministic_cudnn = b;
+}
+
+bool Context::benchmarkCuDNN() const {
+  return benchmark_cudnn;
+}
+
+void Context::setBenchmarkCuDNN(bool b) {
+  benchmark_cudnn = b;
+}
+
+bool Context::hasMKL() const {
+#if AT_MKL_ENABLED()
+  return true;
+#else
+  return false;
+#endif
+}
+
 bool Context::hasCUDA() const {
 #if AT_CUDA_ENABLED()
   int count;
@@ -72,6 +114,48 @@ bool Context::hasCUDA() const {
 cudaStream_t Context::getCurrentCUDAStream() const {
   return THCState_getCurrentStream(thc_state);
 }
+struct cudaDeviceProp* Context::getCurrentDeviceProperties() const {
+  return THCState_getCurrentDeviceProperties(thc_state);
+}
+struct cudaDeviceProp* Context::getDeviceProperties(int device) const {
+  return THCState_getDeviceProperties(thc_state, device);
+}
+#else
+cudaStream_t Context::getCurrentCUDAStream() const {
+  throw std::runtime_error("ATen not compiled with CUDA");
+}
+struct cudaDeviceProp* Context::getCurrentDeviceProperties() const {
+  throw std::runtime_error("ATen not compiled with CUDA");
+}
+struct cudaDeviceProp* Context::getDeviceProperties(int device) const {
+  throw std::runtime_error("ATen not compiled with CUDA");
+}
 #endif
+
+int64_t Context::current_device() const {
+#if AT_CUDA_ENABLED()
+  int device;
+  cudaError_t err = cudaGetDevice(&device);
+  if (err == cudaSuccess) {
+    return device;
+  }
+#endif
+  return -1;
+}
+
+bool Context::setFlushDenormal(bool on) {
+#ifdef USE_SSE3
+  // Setting flush-to-zero (FTZ) flag
+  _MM_SET_FLUSH_ZERO_MODE(on ? _MM_FLUSH_ZERO_ON
+                             : _MM_FLUSH_ZERO_OFF);
+
+  // Setting denormals-are-zero (DAZ) flag
+  _MM_SET_DENORMALS_ZERO_MODE(on ? _MM_DENORMALS_ZERO_ON
+                                 : _MM_DENORMALS_ZERO_OFF);
+  return true;
+#else
+  return false;
+#endif
+}
 
 }

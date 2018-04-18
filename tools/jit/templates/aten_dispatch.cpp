@@ -1,10 +1,12 @@
 #include "aten_dispatch.h"
 #include "torch/csrc/autograd/profiler.h"
 #include "torch/csrc/jit/interned_strings.h"
+#include "torch/csrc/jit/tensor_conversions.h"
 #include "torch/csrc/utils/functional.h"
 
 #include <unordered_map>
 #include <cstring>
+#include <tuple>
 
 // ${generated_comment}
 
@@ -16,91 +18,64 @@ using at::Scalar;
 using at::Tensor;
 using at::IntList;
 using at::TensorList;
-using operator_constructor = std::function<TensorOp(jit::Node*)>;
 
 namespace {
 
-// a temporary Tensor that does not alter the refcount of impl on
-// acquisition or release, avoids any refcounting in dispatch functions
-struct TensorTemporary {
-  explicit TensorTemporary(at::Retainable * impl)
-  : temp(static_cast<at::TensorImpl*>(impl), false /* do not retain*/) {}
-  const at::Tensor & value() {
-    return temp;
+// The packer here is carefully written not to make any unnecessary
+// copies.
+
+// pack takes the return values of aten functions pushes them onto the stack
+template<typename T>
+void pack(Stack & stack, T&& v) {
+  stack.push_back(as_tensor(std::move(v)));
+}
+template<>
+void pack(Stack & stack, Tensor&& v) {
+  stack.push_back(std::move(v));
+}
+template<>
+void pack(Stack & stack, std::vector<Tensor>&& ts) {
+  for(auto& t : ts) {
+    stack.push_back(std::move(t));
   }
-  ~TensorTemporary() {
-    // don't reduce the refcount on deletion
-    temp.detach();
+}
+
+template<std::size_t remaining, typename... Args>
+struct TuplePacker
+{
+  // NB: *Not* a universal reference.
+  static void execute(Stack & stack, std::tuple<Args...> && t)
+  {
+    // NB: The move here does not "destroy" the entire tuple, that is
+    // not what std::move does; only the particular tuple index
+    // processed here gets stolen.
+    pack(stack, std::get<sizeof...(Args) - remaining>(std::move(t)));
+    TuplePacker<remaining - 1, Args...>::execute(stack, std::move(t));
   }
-private:
-  at::Tensor temp;
 };
 
-// same list of Tensors that does not alter the refcount on acquisition or
-// release of the refcount temporaries, only used rarely (e.g. for cat)
-struct TensorTemporaryList {
-  explicit TensorTemporaryList(const list_of_retainable & ts) {
-    tensors.reserve(ts.size());
-    for(auto & t : ts) {
-      tensors.push_back(at::Tensor(static_cast<at::TensorImpl*>(t), false /*do not retain*/));
-    }
-  }
-  // TensorTemporaryList only exposes a TensorList,
-  // not its underlying std::vector<at::Tensor>.
-  // This ArrayRef has the desired semantics: if you get out an at::Tensor from it,
-  // the refcount is bumped;
-  // if you take a reference, it is only guaranteed to stay live as long as the ArrayRef is live,
-  operator TensorList() const {
-    return tensors;
-  }
-  ~TensorTemporaryList() {
-    // we didnt retain the tensors when we created the list
-    // so make sure we don't release them when we free it
-    for(auto & t : tensors) {
-      t.detach();
-    }
-  }
-private:
-  std::vector<at::Tensor> tensors;
+template<typename... Args>
+struct TuplePacker<0, Args...>
+{
+  static void execute(Stack & stack, std::tuple<Args...> && t) {};
 };
 
-using list_of_retainable = std::vector<at::Retainable*>;
+template<typename... Args>
+void pack(Stack & stack, std::tuple<Args...> && t) {
+  TuplePacker<sizeof...(Args), Args...>::execute(stack, std::move(t));
+}
 
-// pack list takes the return values of aten functions and puts them into a
-// refcounted list. Each pack_list variant takes a Tensor by value, ensuring
-// it has a owning reference and then that reference is stolen ad added to the
-// list_of_retainable output list.
-// pack_list never operates on tensor temporaries.
-void pack_list(list_of_retainable & outputs, Tensor v) { outputs.push_back(toRetainableSteal(std::move(v))); }
-void pack_list(list_of_retainable & outputs, Scalar v) {
-  outputs.push_back(toRetainableSteal(v.toTensor()));
-}
-void pack_list(list_of_retainable & outputs, std::vector<Tensor> && ts) {
-  outputs.reserve(ts.size());
-  for(auto & t : ts) {
-    outputs.push_back(toRetainableSteal(std::move(t)));
-  }
-}
-void pack_list(list_of_retainable & outputs, std::tuple<Tensor, Tensor> v) {
-  outputs.push_back(toRetainableSteal(std::move(std::get<0>(v))));
-  outputs.push_back(toRetainableSteal(std::move(std::get<1>(v))));
-}
-void pack_list(list_of_retainable & outputs, std::tuple<Tensor, Tensor, Tensor> v) {
-  outputs.push_back(toRetainableSteal(std::move(std::get<0>(v))));
-  outputs.push_back(toRetainableSteal(std::move(std::get<1>(v))));
-  outputs.push_back(toRetainableSteal(std::move(std::get<2>(v))));
-}
-void pack_list(list_of_retainable & outputs, std::tuple<Tensor, Tensor, Tensor, Tensor> v) {
-  outputs.push_back(toRetainableSteal(std::move(std::get<0>(v))));
-  outputs.push_back(toRetainableSteal(std::move(std::get<1>(v))));
-  outputs.push_back(toRetainableSteal(std::move(std::get<2>(v))));
-  outputs.push_back(toRetainableSteal(std::move(std::get<3>(v))));
+int deviceForInputs(Stack & stack, size_t N) {
+  if(N == 0)
+    return -1;
+  auto & t = *(stack.end() - N);
+  return t.type().is_cuda() ? (int) t.get_device() : -1;
 }
 
 // A list of functions taking TensorList arguments (where we can't use
 // the number of inputs to choose an overload).
 std::unordered_set<Symbol> tensor_vararg_fns = {
-  kcat,
+  aten::cat,
 };
 
 template<size_t N>
@@ -111,21 +86,27 @@ std::array<bool, N> as_bool_array(const std::vector<int64_t>& vec) {
   return res;
 }
 
+
+using operator_constructor = std::function<TensorOp(jit::Node*)>;
 std::unordered_map<std::string, operator_constructor> constructors = {
   ${constructors}
 };
 
 std::string getDescriptor(jit::Node* n) {
   std::stringstream s;
-  s << symbolToString(n->kind());
+  JIT_ASSERT(n->kind().is_aten());
+  s << n->kind().toUnqualString();
   if (tensor_vararg_fns.count(n->kind()) == 0)
     s << "-" << n->inputs().size();
   else
     s << "-*";
-  std::vector<const char*> attr_names = fmap(n->attributeNames(), &symbolToString);
-  std::sort(attr_names.begin(), attr_names.end(), [](const char *a, const char *b) {
-    return std::strcmp(a, b) < 0;
+  std::vector<std::string> attr_names = fmap(n->attributeNames(), [&](Symbol x) {
+    std::stringstream ss;
+    ss << x.toUnqualString() << "_" << toString(n->kindOf(x));
+    return ss.str();
   });
+  std::sort(attr_names.begin(), attr_names.end());
+
   for (const auto & name : attr_names)
     s << "-" << name;
   return s.str();
@@ -133,14 +114,23 @@ std::string getDescriptor(jit::Node* n) {
 
 } // anonymous namespace
 
-TensorOp getTensorOp(jit::Node* n) {
+at::optional<TensorOp> findTensorOp(jit::Node* n) {
   auto signature = getDescriptor(n);
-  try {
-    return constructors.at(signature)(n);
-  } catch (std::out_of_range &e) {
-    throw std::runtime_error("Unsupported op descriptor: " + signature + ". "
-                             "File a bug report.");
+  auto it = constructors.find(signature);
+  if(it == constructors.end()) {
+    return at::nullopt;
   }
-};
+  return it->second(n);
+}
+TensorOp getTensorOp(jit::Node* n) {
+  auto op = findTensorOp(n);
+  if (!op) {
+    throw std::runtime_error(
+        "Unsupported op descriptor: " + getDescriptor(n) +
+        ". "
+        "File a bug report.");
+  }
+  return op.value();
+}
 
 }} // namespace torch::jit

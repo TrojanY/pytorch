@@ -127,6 +127,16 @@ CAFFE2_DECLARE_BINARY_OP(Div);
 
 #undef CAFFE2_DECLARE_BINARY_OP
 
+namespace internal {
+
+// Increase the index digits by one based on dims.
+void IncreaseIndexInDims(const int n, const int* dims, int* index);
+
+// Get index value from dims and index digits.
+int GetIndexFromDims(const int n, const int* dims, const int* index);
+
+} // namespace internal
+
 template <typename T, class Context>
 void ReduceMin(
     const int N,
@@ -143,6 +153,26 @@ void ReduceMax(
     Context* context);
 
 template <typename T, class Context>
+void ReduceMin(
+    const int num_dims,
+    const int* dims,
+    const int num_axes,
+    const int* axes,
+    const T* X,
+    T* Y,
+    Context* context);
+
+template <typename T, class Context>
+void ReduceMax(
+    const int num_dims,
+    const int* dims,
+    const int num_axes,
+    const int* axes,
+    const T* X,
+    T* Y,
+    Context* context);
+
+template <typename T, class Context>
 void ReduceSum(
     const int num_dims,
     const int* dims,
@@ -150,8 +180,7 @@ void ReduceSum(
     const int* axes,
     const T* X,
     T* Y,
-    Context* context,
-    Tensor<Context>* scratch_ptr = nullptr);
+    Context* context);
 
 template <typename T, class Context>
 void ReduceMean(
@@ -161,10 +190,9 @@ void ReduceMean(
     const int* axes,
     const T* X,
     T* Y,
-    Context* context,
-    Tensor<Context>* scratch_ptr = nullptr);
+    Context* context);
 
-// Broadcasts X with X_dims to Y with Y_dims and multiply the data by scale.
+// Broadcasts X with X_dims to Y with Y_dims.
 template <typename T, class Context>
 void Broadcast(
     const int X_ndim,
@@ -173,6 +201,18 @@ void Broadcast(
     const int* Y_dims,
     const T* X,
     T* Y,
+    Context* context);
+
+// COmputes mean and variance over axes.
+template <typename T, class Context>
+void Moments(
+    const int num_dims,
+    const int* dims,
+    const int num_axes,
+    const int* axes,
+    const T* X,
+    T* mean,
+    T* variance,
     Context* context);
 
 // Adds batch sub-tensors elementwise to output. Stripe is the stripe length

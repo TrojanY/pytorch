@@ -71,23 +71,18 @@ def _infer_shapes(init_net, pred_net, inputs):
     return hints
 
 def transform_caffe2_net(
-        device_option,
-        init_net,
         pred_net,
         input_shapes,
         populate_shapes = False,
         max_batch_size=50,
         max_workspace_size=2*1024*1024,
         verbosity=1,
-        debug_builder=False):
+        debug_builder=False,
+        build_serializable_op=True):
     """
     Transfrom the caffe2_net by collapsing TRT-runnable nodes into trt c2 ops
     """
     check_gpu_()
-
-    # Fill the workspace with the weights
-    with core.DeviceScope(device_option):
-        workspace.RunNetOnce(init_net)
 
     # Hacky way to infer shapes as not all our operators have shape inference function.
     # Normally this is not needed
@@ -105,7 +100,8 @@ def transform_caffe2_net(
                                    max_batch_size,
                                    max_workspace_size,
                                    verbosity,
-                                   debug_builder)
+                                   debug_builder,
+                                   build_serializable_op)
     pred_net_cut = caffe2_pb2.NetDef()
     pred_net_cut.ParseFromString(pred_net_str)
     return pred_net_cut
